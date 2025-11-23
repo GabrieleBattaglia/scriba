@@ -18,7 +18,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "1.0.0 di novembre 2025"
+APP_VERSION = "1.0.1 di novembre 2025"
 SETTINGS_FILE = "scriba_settings.json"
 
 PRESET_TEMPLATE = {
@@ -652,8 +652,10 @@ def main():
         print("6. Elimina Preset")
         print("7. Esci")
         s = input("\nScelta: ")
-        if s == '1': esegui_backup(False)
-        elif s == '2': esegui_backup(True)
+        if s == '1': 
+            esegui_backup(simulazione=False)
+        elif s == '2': 
+            esegui_backup(simulazione=True)
         elif s == '3': visualizza_presets()
         elif s == '4': crea_nuovo_preset()
         elif s == '5': modifica_preset()
