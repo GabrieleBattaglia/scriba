@@ -1,0 +1,106 @@
+{
+    "presets": [
+        {
+            "titolo": "Gigante",
+            "giorni_periodicita": 7,
+            "ultimo_backup": "2025-11-22",
+            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
+            "coppie_cartelle": [
+                {
+                    "origine": "E:\\VstPlugins",
+                    "nome_cartella": "VstPlugins"
+                },
+                {
+                    "origine": "E:\\Documenti",
+                    "nome_cartella": "Documenti"
+                },
+                {
+                    "origine": "E:\\Cucina",
+                    "nome_cartella": "Cucina"
+                },
+                {
+                    "origine": "E:\\DownloadImmagazzinati",
+                    "nome_cartella": "DownloadImmagazzinati"
+                },
+                {
+                    "origine": "E:\\Films",
+                    "nome_cartella": "Films"
+                },
+                {
+                    "origine": "E:\\Libri",
+                    "nome_cartella": "Libri"
+                },
+                {
+                    "origine": "E:\\Ludoteca",
+                    "nome_cartella": "Ludoteca"
+                },
+                {
+                    "origine": "E:\\Manuali",
+                    "nome_cartella": "Manuali"
+                },
+                {
+                    "origine": "E:\\Music",
+                    "nome_cartella": "Music"
+                },
+                {
+                    "origine": "E:\\Software",
+                    "nome_cartella": "Software"
+                },
+                {
+                    "origine": "E:\\Sounds",
+                    "nome_cartella": "Sounds"
+                },
+                {
+                    "origine": "E:\\Video",
+                    "nome_cartella": "Video"
+                },
+                {
+                    "origine": "E:\\Audio",
+                    "nome_cartella": "Audio"
+                },
+                {
+                    "origine": "E:\\13 ilbarzellettiere",
+                    "nome_cartella": "13 ilbarzellettiere"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\AppData\\Roaming\\Thunderbird",
+                    "nome_cartella": "Thunderbird"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\AppData\\Roaming\\nvda",
+                    "nome_cartella": "nvda"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\.ssh",
+                    "nome_cartella": ".ssh"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\AppData\\Roaming\\Code\\User",
+                    "nome_cartella": "User"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\.vscode",
+                    "nome_cartella": ".vscode"
+                },
+                {
+                    "origine": "C:\\Users\\Utente\\AppData\\Roaming\\REAPER",
+                    "nome_cartella": "REAPER"
+                }
+            ],
+            "machine_id": "GabryBat | Utente"
+        },
+        {
+            "titolo": "test5",
+            "machine_id": "GabryBat | Utente",
+            "giorni_periodicita": 11,
+            "ultimo_backup": null,
+            "root_destinazione": "E:\\git\\log",
+            "coppie_cartelle": [
+                {
+                    "origine": "C:\\inetpub",
+                    "nome_cartella": "inetpub"
+                }
+            ]
+        }
+    ]
+}
