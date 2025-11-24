@@ -18,7 +18,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "1.0.1 di novembre 2025"
+APP_VERSION = "1.2.0 di novembre 2025"
 SETTINGS_FILE = "scriba_settings.json"
 
 PRESET_TEMPLATE = {
@@ -137,7 +137,7 @@ def stampa_dettaglio_esteso(preset):
         print(f"  [DST] ...\\{c['nome_cartella']}")
     print("="*60 + "\n")
 
-# --- CORE: MOTORE ROBOCOPY ---
+# --- CORE: MOTORE ROBOCOPY CON ETA ---
 
 def run_robocopy_engine(src, dst, log_file, total_files_source, is_simulation=False):
     cmd = ["robocopy", src, dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/NDL", "/NJH", "/E", "/NP"]
@@ -147,8 +147,9 @@ def run_robocopy_engine(src, dst, log_file, total_files_source, is_simulation=Fa
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW 
     
-    processed_count = 0 # File effettivamente toccati (Copiati/Aggiornati)
+    processed_count = 0 
     last_update_time = 0
+    start_run_time = time.time() # Tempo zero per calcolo media
     refresh_rate = 5.0 
 
     try:
@@ -174,32 +175,50 @@ def run_robocopy_engine(src, dst, log_file, total_files_source, is_simulation=Fa
                 
                 if line:
                     stripped = line.strip()
-                    # Filtriamo le righe: Escludiamo header, footer e "File(s)"
-                    # Escludiamo anche righe che indicano "Extra" (cancellazioni) per non falsare il conto dei copiati
                     if stripped and not stripped.startswith("---") and not "File(s)" in stripped and not "*EXTRA" in stripped:
                         processed_count += 1
                         current_time = time.time()
+                        
                         if current_time - last_update_time > refresh_rate:
+                            # 1. Calcolo Percentuale
                             perc = 0.0
                             if total_files_source > 0:
                                 perc = (processed_count / total_files_source) * 100
                                 if perc > 100: perc = 99.9 
                             
+                            # 2. Calcolo ETA (Ora Fine)
+                            elapsed_total = current_time - start_run_time
+                            eta_str = "??:??" # Default (Warm-up)
+                            
+                            # Attendiamo 10 secondi e almeno 10 file per avere una statistica sensata
+                            if elapsed_total > 10 and processed_count > 10 and total_files_source > 0:
+                                files_remaining = total_files_source - processed_count
+                                # Evitiamo divisione per zero
+                                if processed_count > 0:
+                                    avg_time_per_file = elapsed_total / processed_count
+                                    time_remaining_sec = files_remaining * avg_time_per_file
+                                    
+                                    # Calcolo orario finale
+                                    now = datetime.datetime.now()
+                                    end_time = now + datetime.timedelta(seconds=time_remaining_sec)
+                                    eta_str = end_time.strftime("%H:%M")
+
+                            # 3. Formattazione Stringa
                             parts = stripped.split("\t")
                             file_info = parts[-1].strip() if parts else stripped
-                            short_path = smart_truncate(file_info, 50)
+                            short_path = smart_truncate(file_info, 45) # Accorciato un po' per far spazio all'ora
                             
-                            sys.stdout.write(f"\r[{perc:5.1f}%] {processed_count}/{total_files_source} | {short_path: <55}")
+                            # Format: [99.9%] [14:30] Path...
+                            sys.stdout.write(f"\r[{perc:5.1f}%] [{eta_str}] {short_path: <50}")
                             sys.stdout.flush()
                             last_update_time = current_time
 
                         f_log.write(line)
-                    # Scriviamo comunque le righe EXTRA nel log, anche se non le contiamo come "Copiati"
                     elif stripped and "*EXTRA" in stripped:
                         f_log.write(line)
 
         print("\r" + " " * 110 + "\r", end="") 
-        return processed_count # Ritorniamo il numero di file elaborati
+        return processed_count 
 
     except Exception as e:
         print(f"\nErrore esecuzione Robocopy: {e}")
@@ -305,18 +324,15 @@ def esegui_backup(preset_index=None, simulazione=False):
 
     start_total = time.time()
     
-    # Accumulatori Globali
     grand_pre_files = 0
     grand_post_files = 0
     grand_pre_folders = 0
     grand_post_folders = 0
     grand_pre_size = 0
     grand_post_size = 0
-    
-    grand_files_copied = 0 # Robocopy
-    grand_files_new = 0    # Stimati
-    grand_files_mod = 0    # Stimati
-    
+    grand_files_copied = 0 
+    grand_files_new = 0    
+    grand_files_mod = 0    
     processed_pairs_count = 0
 
     print(f"\n--- Inizio {tipo_run}: {preset['titolo']} ---")
@@ -351,7 +367,6 @@ def esegui_backup(preset_index=None, simulazione=False):
             log_file = os.path.join(log_dir, f"{nome_dir}-log.txt")
             
             t_start_copy = time.time()
-            # Ora run_robocopy ritorna il numero di file effettivamente copiati/aggiornati
             files_copied_real = run_robocopy_engine(raw_src, raw_dst, log_file, files_src_count, is_simulation=simulazione)
             t_end_copy = time.time()
             
@@ -359,7 +374,6 @@ def esegui_backup(preset_index=None, simulazione=False):
             files_post, folders_post, size_post = get_dir_stats(stat_dst)
             print(" Fatto.")
             
-            # --- AGGIORNAMENTO TOTALI GLOBALI BASE ---
             grand_pre_files += files_pre
             grand_post_files += files_post
             grand_pre_folders += folders_pre
@@ -368,23 +382,17 @@ def esegui_backup(preset_index=None, simulazione=False):
             grand_post_size += size_post
             processed_pairs_count += 1
 
-            # --- CALCOLO NUOVI vs MODIFICATI (Singola Cartella) ---
             diff_files = files_post - files_pre
             diff_size_val = size_post - size_pre
             diff_folders = folders_post - folders_pre
 
-            # Logica deduttiva
-            # Se diff_files > 0, sono sicuramente Nuovi (almeno quelli).
-            # I Modificati sono quelli copiati (files_copied_real) MENO quelli Nuovi.
             estimated_new = max(0, diff_files) 
             estimated_mod = max(0, files_copied_real - estimated_new)
             
-            # Accumulo globali avanzati
             grand_files_copied += files_copied_real
             grand_files_new += estimated_new
             grand_files_mod += estimated_mod
             
-            # Calcoli Visuali
             tempo_impiegato = t_end_copy - t_start_copy
             
             if size_pre == 0:
@@ -403,7 +411,6 @@ def esegui_backup(preset_index=None, simulazione=False):
             print(f"  Tempo:         {str_tempo}")
             print(f"  Dimensioni:    {format_size(size_pre).replace('+','')} -> {format_size(size_post).replace('+','')} (Diff: {str_diff_size}, {diff_perc:+.2f}%)")
             print(f"  File (Saldo):  {files_pre} -> {files_post} ({diff_files:+d})")
-            # Nuova sezione Dettaglio Operazioni
             print(f"  Dettaglio Ops: {files_copied_real} Copiati (Nuovi: ~{estimated_new}, Modificati: ~{estimated_mod})")
             print("-" * 60)
 
@@ -415,7 +422,6 @@ def esegui_backup(preset_index=None, simulazione=False):
         m_tot, s_tot = divmod(total_time, 60)
         h_tot, m_tot = divmod(m_tot, 60)
         
-        # Delta globali
         diff_total_size = grand_post_size - grand_pre_size
         diff_total_files = grand_post_files - grand_pre_files
         diff_total_folders = grand_post_folders - grand_pre_folders
@@ -464,8 +470,7 @@ def esegui_backup(preset_index=None, simulazione=False):
         print("\n\n!!! INTERRUZIONE (CTRL+C) !!!")
         input("Premi INVIO per tornare al menu...")
 
-# --- FUNZIONI DI MENU (Invariate) ---
-# ... (il resto delle funzioni crea_nuovo_preset, modifica_preset etc resta uguale alla v 0.7.3) ...
+# --- FUNZIONI DI MENU ---
 
 def crea_nuovo_preset():
     print(f"--- {APP_NAME} | Crea Nuovo Preset ---\n")
@@ -623,23 +628,59 @@ def visualizza_presets():
 def check_scadenze_avvio():
     settings = load_settings()
     if not settings: return
-    scaduti = []
+    
+    current_machine = get_machine_id()
+    scaduti_locali = []
+    scaduti_remoti = []
+    
     for idx, p in enumerate(settings["presets"]):
         ult = p["ultimo_backup"]
-        if not ult: scaduti.append(idx)
+        scaduto = False
+        if not ult:
+            scaduto = True
         else:
             try:
                 d = datetime.datetime.strptime(ult, "%Y-%m-%d").date()
                 if (datetime.date.today() - d).days >= p["giorni_periodicita"]:
-                    scaduti.append(idx)
+                    scaduto = True
             except: pass
-    if scaduti:
-        print(f"\n!!! {len(scaduti)} BACKUP SCADUTI !!!")
-        if input("Eseguirli ora? (s/n): ").lower() == 's':
-            for i in scaduti: esegui_backup(i)
+        
+        if scaduto:
+            preset_machine = p.get("machine_id", "Sconosciuto")
+            if preset_machine == current_machine:
+                scaduti_locali.append(idx)
+            else:
+                scaduti_remoti.append(idx)
+    
+    if not scaduti_locali and not scaduti_remoti:
+        return
+
+    print("\n" + "!"*60)
+    print("CONTROLLO AUTOMATICO SCADENZE")
+    print("!"*60)
+
+    if scaduti_remoti:
+        print(f"\n[AVVISO] Ci sono {len(scaduti_remoti)} backup scaduti su ALTRE MACCHINE:")
+        for i in scaduti_remoti:
+            p = settings["presets"][i]
+            print(f" - {p['titolo']} (Macchina: {p.get('machine_id', 'N/A')})")
+        print("   Nota: Collegati alle rispettive macchine per eseguirli.")
+
+    if scaduti_locali:
+        print(f"\n[AZIONE] Ci sono {len(scaduti_locali)} backup scaduti su QUESTA MACCHINA:")
+        for i in scaduti_locali:
+            p = settings["presets"][i]
+            print(f" - {p['titolo']}")
+        
+        print("-" * 60)
+        if input("Vuoi eseguire ora i backup LOCALI scaduti? (s/n): ").lower() == 's':
+            for i in scaduti_locali:
+                esegui_backup(i)
+    elif scaduti_remoti:
+        input("\nPremi INVIO per andare al menu...")
 
 def main():
-    print(f"Benvenuto in {APP_NAME} v{APP_VERSION}\n\tby Gabriele Battaglia (IZ4APU).")
+    print(f"Benvenuto in {APP_NAME} v{APP_VERSION}\n\tby Gabriele Battaglia (IZ4APU)\n")
     print(f"ID: {get_machine_id()}")
     check_scadenze_avvio()
     while True:
@@ -652,10 +693,8 @@ def main():
         print("6. Elimina Preset")
         print("7. Esci")
         s = input("\nScelta: ")
-        if s == '1': 
-            esegui_backup(simulazione=False)
-        elif s == '2': 
-            esegui_backup(simulazione=True)
+        if s == '1': esegui_backup(simulazione=False)
+        elif s == '2': esegui_backup(simulazione=True)
         elif s == '3': visualizza_presets()
         elif s == '4': crea_nuovo_preset()
         elif s == '5': modifica_preset()
