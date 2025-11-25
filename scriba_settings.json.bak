@@ -105,6 +105,23 @@
                     "nome_cartella": "Software"
                 }
             ]
+        },
+        {
+            "titolo": "PC-Ufficio",
+            "machine_id": "PC-Battaglia | GBattaglia",
+            "giorni_periodicita": 30,
+            "ultimo_backup": null,
+            "root_destinazione": "P:\\",
+            "coppie_cartelle": [
+                {
+                    "origine": "C:\\",
+                    "nome_cartella": "C"
+                },
+                {
+                    "origine": "E:\\Software",
+                    "nome_cartella": "Software"
+                }
+            ]
         }
     ]
 }
