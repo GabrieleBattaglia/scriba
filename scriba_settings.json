@@ -105,6 +105,23 @@
                     "nome_cartella": "Software"
                 }
             ]
+        },
+        {
+            "titolo": "Il mio piccino",
+            "machine_id": "GabryMiniPC-GPD | Gabriele",
+            "giorni_periodicita": 30,
+            "ultimo_backup": "2025-11-25",
+            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
+            "coppie_cartelle": [
+                {
+                    "origine": "E:\\",
+                    "nome_cartella": "E"
+                }
+            ],
+            "esclusioni": [
+                "E:\\ReaperPeaks",
+                "E:\\Music"
+            ]
         }
     ]
 }

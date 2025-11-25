@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 7,
-            "ultimo_backup": "2025-11-22",
+            "ultimo_backup": "2025-11-25",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -107,20 +107,19 @@
             ]
         },
         {
-            "titolo": "PC-Ufficio",
-            "machine_id": "PC-Battaglia | GBattaglia",
+            "titolo": "Il mio piccino",
+            "machine_id": "GabryMiniPC-GPD | Gabriele",
             "giorni_periodicita": 30,
-            "ultimo_backup": null,
-            "root_destinazione": "P:\\",
+            "ultimo_backup": "2025-11-25",
+            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
             "coppie_cartelle": [
                 {
-                    "origine": "C:\\",
-                    "nome_cartella": "C"
-                },
-                {
-                    "origine": "E:\\Software",
-                    "nome_cartella": "Software"
+                    "origine": "E:\\",
+                    "nome_cartella": "E"
                 }
+            ],
+            "esclusioni": [
+                "E:\\ReaperPeaks"
             ]
         }
     ]
