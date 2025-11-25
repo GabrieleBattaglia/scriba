@@ -90,19 +90,6 @@
             "machine_id": "GabryBat | Utente"
         },
         {
-            "titolo": "test5",
-            "machine_id": "GabryBat | Utente",
-            "giorni_periodicita": 11,
-            "ultimo_backup": null,
-            "root_destinazione": "E:\\git\\log",
-            "coppie_cartelle": [
-                {
-                    "origine": "C:\\inetpub",
-                    "nome_cartella": "inetpub"
-                }
-            ]
-        },
-        {
             "titolo": "PC-Ufficio",
             "machine_id": "PC-Battaglia | GBattaglia",
             "giorni_periodicita": 30,
