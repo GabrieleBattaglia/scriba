@@ -18,7 +18,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "1.3.4 di novembre 2025"
+APP_VERSION = "1.3.5 di novembre 2025"
 SETTINGS_FILE = "scriba_settings.json"
 
 PRESET_TEMPLATE = {
@@ -90,7 +90,7 @@ def smart_truncate(text, max_len=45):
     tail = text[-part_len:]
     return f"{head}...{tail}"
 
-def get_dir_stats(path):
+def get_dir_stats(path, user_exclusions=None):
     total_size = 0
     num_files = 0
     num_folders = 0
@@ -99,18 +99,58 @@ def get_dir_stats(path):
     if not os.path.exists(safe_path):
         return 0, 0, 0
 
+    # Normalizziamo le esclusioni utente per confronto (tutto minuscolo, path assoluti)
+    normalized_user_excl = []
+    if user_exclusions:
+        for p in user_exclusions:
+            # fix_long_path potrebbe aggiungere \\?\ che dobbiamo gestire o ignorare nel confronto
+            # Per sicurezza usiamo abspath standard e lower()
+            normalized_user_excl.append(os.path.abspath(p).lower())
+
+    # Esclusioni di sistema (Nomi cartella esatti)
+    sys_excl_names = ["$RECYCLE.BIN", "System Volume Information", "Recovery"]
+
     try:
-        for root, dirs, files in os.walk(safe_path):
+        # topdown=True è FONDAMENTALE: ci permette di modificare 'dirs' in-place
+        # per dire a os.walk di NON scendere in quelle cartelle
+        for root, dirs, files in os.walk(safe_path, topdown=True):
+            
+            # --- FILTRO ESCLUSIONI ---
+            # Iteriamo al contrario per poter rimuovere elementi dalla lista 'dirs' senza rompere il ciclo
+            for i in range(len(dirs) - 1, -1, -1):
+                d_name = dirs[i]
+                d_full_path = os.path.join(root, d_name)
+                
+                # 1. Controllo Esclusioni di Sistema (solo se siamo alla root o quasi)
+                # (Semplificazione: se la cartella si chiama così, la saltiamo sempre, è più sicuro)
+                if d_name in sys_excl_names:
+                    del dirs[i]
+                    continue
+                
+                # 2. Controllo Esclusioni Utente
+                if normalized_user_excl:
+                    # Confronto case-insensitive
+                    if os.path.abspath(d_full_path).lower() in normalized_user_excl:
+                        del dirs[i]
+                        continue
+
+            # --- CONTEGGIO ---
             num_folders += len(dirs)
-            num_files += len(files)
+            # Filtriamo anche i file di sistema enormi dal conteggio (pagefile, ecc)
+            sys_files_excl = ["pagefile.sys", "hiberfil.sys", "swapfile.sys"]
+            
             for f in files:
+                if f.lower() in sys_files_excl: 
+                    continue
+                
+                num_files += 1
                 try:
                     fp = os.path.join(root, f)
                     total_size += os.path.getsize(fp)
                 except OSError: pass
+                
     except Exception: pass 
     return num_files, num_folders, total_size
-
 def format_size(bytes_val):
     sign = ""
     if bytes_val < 0:
@@ -394,18 +434,18 @@ def esegui_backup(preset_index=None, simulazione=False):
                 print(f"  ERRORE: Origine non trovata: {raw_src}")
                 continue
 
+            lista_esclusioni = preset.get("esclusioni", [])
             print("  Analisi sorgente (per barra di progresso)...", end="", flush=True)
-            files_src_count, _, _ = get_dir_stats(stat_src)
+            files_src_count, _, _ = get_dir_stats(stat_src, user_exclusions=lista_esclusioni)
             print(f" Fatto ({files_src_count} file stimati).")
 
             print("  Analisi destinazione (per statistiche diff)...", end="", flush=True)
-            files_pre, folders_pre, size_pre = get_dir_stats(stat_dst)
+            files_pre, folders_pre, size_pre = get_dir_stats(stat_dst, user_exclusions=lista_esclusioni)
             print(" Fatto.")
 
             log_file = os.path.join(log_dir, f"{nome_dir}-log.txt")
             
             t_start_copy = time.time()
-            lista_esclusioni = preset.get("esclusioni", [])
             files_copied_real = run_robocopy_engine(
                 raw_src, 
                 raw_dst, 
@@ -417,7 +457,7 @@ def esegui_backup(preset_index=None, simulazione=False):
             t_end_copy = time.time()
             
             print("  Analisi statistiche finali...", end="", flush=True)
-            files_post, folders_post, size_post = get_dir_stats(stat_dst)
+            files_post, folders_post, size_post = get_dir_stats(stat_dst, user_exclusions=lista_esclusioni)
             print(" Fatto.")
             
             grand_pre_files += files_pre
