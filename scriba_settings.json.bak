@@ -119,8 +119,23 @@
                 }
             ],
             "esclusioni": [
-                "E:\\ReaperPeaks"
+                "E:\\ReaperPeaks",
+                "E:\\Music"
             ]
+        },
+        {
+            "titolo": "VivoBookPro15",
+            "machine_id": "VivoBookPro15GabryB | asus",
+            "giorni_periodicita": 30,
+            "ultimo_backup": null,
+            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\VivoBookPro15",
+            "coppie_cartelle": [
+                {
+                    "origine": "E:\\Documenti",
+                    "nome_cartella": "Documenti"
+                }
+            ],
+            "esclusioni": []
         }
     ]
 }
