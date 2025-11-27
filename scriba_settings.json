@@ -2,7 +2,7 @@
     "presets": [
         {
             "titolo": "Gigante",
-            "giorni_periodicita": 7,
+            "giorni_periodicita": 21,
             "ultimo_backup": "2025-11-25",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
@@ -87,7 +87,8 @@
                     "nome_cartella": "REAPER"
                 }
             ],
-            "machine_id": "GabryBat | Utente"
+            "machine_id": "GabryBat | Utente",
+            "esclusioni": []
         },
         {
             "titolo": "PC-Ufficio",
