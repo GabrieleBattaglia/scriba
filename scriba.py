@@ -18,7 +18,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.0.3 di dicembre 2025"
+APP_VERSION = "2.0.4 di dicembre 2025"
 SETTINGS_FILE = "scriba_settings.json"
 REFRESH_RATE = 5.0
 PRESET_TEMPLATE = {
@@ -230,19 +230,18 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
                         global_total=0, global_offset=0, global_start_time=0):
     """
     Esegue Robocopy con fix percorsi, ETA e parsing STATISTICHE CORRETTO.
+    Ignora le righe di riepilogo finale (Durata, Finito, ecc.) nella barra.
     """
-    # Usiamo la costante globale o un default se non esiste
     try: rate = REFRESH_RATE
     except NameError: rate = 5.0
 
-    # --- FIX PERCORSI PER ROBOCOPY ---
+    # --- FIX PERCORSI ---
     cmd_src = src.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_src.endswith("\\") and not cmd_src.endswith(":\\"): cmd_src = cmd_src.rstrip("\\")
     
     cmd_dst = dst.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_dst.endswith("\\") and not cmd_dst.endswith(":\\"): cmd_dst = cmd_dst.rstrip("\\")
 
-    # /BYTES = dimensioni esatte, essenziale per il parsing
     cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/NDL", "/NJH", "/NP", "/BYTES"]
     
     if user_exclusions:
@@ -265,8 +264,10 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
     processed_local = 0
     last_update_time = 0
     
-    # Parole chiave da ignorare per la barra (non vogliamo vedere le righe di riepilogo nella barra)
-    summary_keywords = ["file", "files", "dir", "dirs", "bytes", "byte", "totale", "total"]
+    # --- LISTA NERA ESTESA ---
+    # Aggiunte: durata, duration, finito, ended, velocità, speed
+    summary_keywords = ["file", "files", "dir", "dirs", "byte", "bytes", "totale", "total", 
+                        "durata", "duration", "finito", "ended", "velocità", "speed", "error"]
 
     try:
         process = subprocess.Popen(
@@ -285,32 +286,25 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
                 if line:
                     stripped = line.strip()
                     lower_line = stripped.lower()
-                    f_log.write(line) # Loggiamo tutto per sicurezza
+                    f_log.write(line)
 
-                    # --- NUOVO PARSING ROBUSTO ---
-                    # Cerchiamo le righe statistiche basandoci sulle parole chiave E sulla presenza di numeri
-                    # Esempio: "Files : 100 10..." o "Cartelle : 5 0..."
+                    # --- PARSING ROBUSTO ---
                     nums = parse_robocopy_stat_line(line)
-                    
-                    # Se abbiamo trovato dei numeri, cerchiamo di capire a cosa si riferiscono
                     if nums:
                         if "dir" in lower_line or "cartell" in lower_line: 
-                            # [Total] [Copied] [Skipped] [Mismatch] [Failed] [Extras]
                             stats["dirs_total"] = nums[0]
-                            if len(nums) > 1: stats["dirs_created"] = nums[1] # Robocopy considera le dir create come "copiate"
-                        
+                            if len(nums) > 1: stats["dirs_created"] = nums[1]
                         elif "file" in lower_line:
                             stats["files_total"] = nums[0]
                             if len(nums) > 1: stats["files_copied"] = nums[1]
                             if len(nums) >= 5: stats["files_failed"] = nums[4]
                             if len(nums) >= 6: stats["files_extras"] = nums[5]
-                        
                         elif "byte" in lower_line:
                             stats["bytes_total"] = nums[0]
                             if len(nums) > 1: stats["bytes_copied"] = nums[1]
 
                     # --- AGGIORNAMENTO BARRA ---
-                    # Mostriamo l'avanzamento solo se NON è una riga di riepilogo e NON è un separatore
+                    # Controllo esteso per evitare di stampare "Durata: ..."
                     is_summary = any(k in lower_line for k in summary_keywords) or "---" in stripped
                     
                     if stripped and not is_summary:
