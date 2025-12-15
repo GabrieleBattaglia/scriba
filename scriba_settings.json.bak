@@ -98,14 +98,27 @@
             "root_destinazione": "P:\\",
             "coppie_cartelle": [
                 {
-                    "origine": "C:\\",
-                    "nome_cartella": "C"
-                },
-                {
                     "origine": "E:\\Software",
                     "nome_cartella": "Software"
+                },
+                {
+                    "origine": "C:\\Users\\GBattaglia\\AppData\\Roaming",
+                    "nome_cartella": "Roaming"
+                },
+                {
+                    "origine": "C:\\Program Files (x86)",
+                    "nome_cartella": "Program Files (x86)"
+                },
+                {
+                    "origine": "C:\\Program Files",
+                    "nome_cartella": "Program Files"
+                },
+                {
+                    "origine": "C:\\ProgramData",
+                    "nome_cartella": "ProgramData"
                 }
-            ]
+            ],
+            "esclusioni": []
         },
         {
             "titolo": "Il mio piccino",
