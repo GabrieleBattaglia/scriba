@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2025-12-06",
+            "ultimo_backup": "2025-12-16",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -85,35 +85,13 @@
                 {
                     "origine": "C:\\Users\\Utente\\AppData\\Roaming\\REAPER",
                     "nome_cartella": "REAPER"
+                },
+                {
+                    "origine": "E:\\git\\Mine",
+                    "nome_cartella": "Mine"
                 }
             ],
             "machine_id": "GabryBat | Utente",
-            "esclusioni": []
-        },
-        {
-            "titolo": "PC-Ufficio",
-            "machine_id": "PC-Battaglia | GBattaglia",
-            "giorni_periodicita": 30,
-            "ultimo_backup": null,
-            "root_destinazione": "P:\\",
-            "coppie_cartelle": [
-                {
-                    "origine": "E:\\Software",
-                    "nome_cartella": "Software"
-                },
-                {
-                    "origine": "C:\\Program Files (x86)",
-                    "nome_cartella": "Program Files (x86)"
-                },
-                {
-                    "origine": "C:\\Program Files",
-                    "nome_cartella": "Program Files"
-                },
-                {
-                    "origine": "C:\\ProgramData",
-                    "nome_cartella": "ProgramData"
-                }
-            ],
             "esclusioni": []
         },
         {
