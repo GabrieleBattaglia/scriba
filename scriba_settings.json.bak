@@ -85,39 +85,13 @@
                 {
                     "origine": "C:\\Users\\Utente\\AppData\\Roaming\\REAPER",
                     "nome_cartella": "REAPER"
+                },
+                {
+                    "origine": "E:\\git\\Mine",
+                    "nome_cartella": "Mine"
                 }
             ],
             "machine_id": "GabryBat | Utente",
-            "esclusioni": []
-        },
-        {
-            "titolo": "PC-Ufficio",
-            "machine_id": "PC-Battaglia | GBattaglia",
-            "giorni_periodicita": 30,
-            "ultimo_backup": null,
-            "root_destinazione": "P:\\",
-            "coppie_cartelle": [
-                {
-                    "origine": "E:\\Software",
-                    "nome_cartella": "Software"
-                },
-                {
-                    "origine": "C:\\Users\\GBattaglia\\AppData\\Roaming",
-                    "nome_cartella": "Roaming"
-                },
-                {
-                    "origine": "C:\\Program Files (x86)",
-                    "nome_cartella": "Program Files (x86)"
-                },
-                {
-                    "origine": "C:\\Program Files",
-                    "nome_cartella": "Program Files"
-                },
-                {
-                    "origine": "C:\\ProgramData",
-                    "nome_cartella": "ProgramData"
-                }
-            ],
             "esclusioni": []
         },
         {
