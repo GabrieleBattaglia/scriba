@@ -289,7 +289,7 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
                     # --- RILEVAMENTO RIGHE DI RIEPILOGO ---
                     is_header = "total" in lower_line and "copied" in lower_line
                     is_separator = "---" in stripped
-                    is_stat_line = (" : " in line) and any(k in lower_line for k in ["file", "dir", "cartell", "byte", "total", "durata", "velocit", "finito", "speed", "ended"])
+                    is_stat_line = (":" in line) and any(k in lower_line for k in ["file", "dir", "cartell", "byte", "total", "durata", "velocit", "finito", "speed", "ended"])
                     is_summary = is_header or is_separator or is_stat_line
 
                     # --- PARSING ROBUSTO ---
