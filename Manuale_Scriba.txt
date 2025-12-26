@@ -1,101 +1,90 @@
 ================================================================================
 SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 1.0.0, novembre 2025.
+Versione: 2.1.0, dicembre 2025.
 ================================================================================
 
 DESCRIZIONE
 -----------
 Scriba è uno script Python (disponibile anche come eseguibile standalone) progettato 
 per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'Robocopy'. 
-Offre un'interfaccia CLI interattiva, gestione dei preset, statistiche dettagliate 
-pre/post backup e controlli di sicurezza per ambienti multi-macchina.
+Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
+estratte direttamente dal motore di copia per la massima precisione.
 
-CARATTERISTICHE TECNICHE
-------------------------
-- Motore: Robocopy con flag ottimizzati (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL).
+CARATTERISTICHE TECNICHE (v2.1.0)
+---------------------------------
+- Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
 - Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
-- UI: Interfaccia CLI con dialoghi di sistema nativi (wxPython) per selezione percorsi.
-- Sicurezza: "Machine ID" check per prevenire esecuzioni accidentali su macchine errate.
-- Feedback: Barra di avanzamento intelligente (Overall %) e calcolo statistiche differenziali.
-- Pulizia: Rilevamento automatico sorgenti mancanti con opzione di rimozione mirror remoto.
-- Accessibilità: Output ottimizzato per screen reader.
+- UI: Interfaccia CLI con dialoghi di sistema nativi (wxPython).
+- Sicurezza: Machine ID check per prevenire esecuzioni su macchine errate.
+- Feedback: Barra di avanzamento basata sul VOLUME DATI (Byte) per un ETA reale.
+- Accessibilità: Refresh della barra ogni 3 secondi (ottimizzato per screen reader).
+- Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche dai preset.
 
 INSTALLAZIONE ED ESECUZIONE
 ---------------------------
 A. ESEGUIBILE (Consigliato per portabilità)
    1. Scaricare l'ultima release (Scriba.exe).
-   2. Eseguire il file. Non richiede installazione. I settings verranno creati nella stessa cartella.
+   2. Eseguire il file. I settings verranno creati nella stessa cartella.
 
 B. SCRIPT PYTHON (Per sviluppo/modifica)
-   Requisiti: Python 3.x (Testato su 3.13), Windows 10/11.
-   1. Installare la dipendenza GUI:
-      pip install wxPython
-   2. Lanciare lo script:
-      python scriba.py
+   Requisiti: Python 3.x, Windows 10/11.
+   1. Installare la dipendenza GUI: pip install wxPython
+   2. Lanciare lo script: python scriba.py
 
 STRUTTURA DEL PRESET
 --------------------
 Ogni preset di backup è composto da:
 - Titolo univoco.
-- Periodicità (giorni dopo i quali il backup è considerato "Scaduto").
-- Machine ID (Hostname | Username) della macchina di creazione.
+- Periodicità (giorni di validità).
+- Machine ID della macchina di creazione.
 - Root Destinazione (es. H:\Backup).
-- Lista illimitata di coppie Cartella Origine -> Nome Cartella Destinazione.
+- Lista di coppie Cartella Origine -> Nome Destinazione.
+- Lista di cartelle da ESCLUDERE.
 
 VOCI DI MENU
 ------------
 
 1. ESEGUI BACKUP
    Lancia la procedura reale.
-   - Verifica Machine ID (chiede forzatura se diverso).
-   - Pre-flight check: verifica esistenza origini. Se mancano, propone rimozione logica e fisica (mirror).
-   - Verifica scadenze temporali.
+   - Fase 1: Inventario rapido (Byte/File previsti).
+   - Fase 2: Esecuzione con monitoraggio costante dei dati trasferiti.
+   - Report Finale: Statistiche dettagliate (Copiati, Saltati, Falliti).
    - Opzione spegnimento PC al termine.
    
 2. ESEGUI SIMULAZIONE (Dry Run)
-   Esegue Robocopy con flag /L (List only).
-   - Nessun file viene copiato o cancellato.
-   - Utile per verificare cosa verrebbe modificato/eliminato con il /MIR.
-   - Genera log consultabili.
+   Esegue Robocopy con flag /L (List only). Utile per vedere cosa verrebbe 
+   modificato senza toccare i file.
 
 3. VISUALIZZA PRESETS
-   Dashboard tabellare. Mostra ID, Titolo, Macchina proprietaria, Data ultima esecuzione e stato scadenza.
+   Dashboard con stato scadenze e ID Macchina.
 
 4. AGGIUNGI PRESET
-   Wizard guidato per la creazione.
-   - Input Titolo e Periodicità.
-   - Selezione Root Destinazione (Dialog Box).
-   - Loop aggiunta Cartelle Origine (Dialog Box).
+   Wizard guidato con selezione cartelle nativa e gestione esclusioni.
 
 5. MODIFICA PRESET
-   Permette di alterare un preset esistente:
-   - Dati Generali: Titolo, Giorni, Root Destinazione.
-   - Origini: Aggiunta/Rimozione cartelle.
-   - Adozione: Aggiorna il Machine ID del preset alla macchina corrente (utile per migrazioni).
+   Permette di alterare dati, aggiungere/rimuovere origini o esclusioni, 
+   o "Adottare" un preset su una nuova macchina (aggiorna Machine ID).
 
 6. ELIMINA PRESET
-   Rimuove il preset dal file JSON. Non tocca i file su disco.
+   Rimuove la configurazione dal file JSON.
 
 7. ESCI
    Chiude l'applicazione.
 
-NOTE SUL COMPORTAMENTO (ROBOCOPY)
----------------------------------
-Scriba utilizza Robocopy in modalità MIRROR (/MIR).
-ATTENZIONE: 
-- I file presenti nella destinazione ma NON nell'origine verranno CANCELLATI.
-- Le modifiche sono distruttive sulla destinazione per garantire la copia 1:1.
-- Flag utilizzati:
-  /MIR : Mirror directory tree (equivale a /E + /PURGE).
-  /XJ  : Esclude Junction Points (evita loop infiniti su cartelle di sistema).
-  /FFT : Tolleranza timestamp 2 secondi (utile per NAS/Filesystem diversi).
-  /R:1 /W:1 : 1 Tentativo, 1 Secondo di attesa in caso di errore (file in uso).
-
 LOGGING
 -------
-I file di log vengono salvati nella root di destinazione, sottocartella \Logs.
-Vengono sovrascritti a ogni esecuzione per mantenere pulizia.
-L'app propone l'apertura della cartella log al termine dell'operazione.
+I file di log (.txt) vengono salvati nella destinazione sotto \Logs.
+Vengono sovrascritti a ogni sessione per risparmiare spazio. 
+Al termine della copia, viene visualizzato il percorso dei log.
+
+NOTE SUL MOTORE DI COPIA
+------------------------
+Scriba usa la modalità MIRROR (/MIR). 
+I file presenti nella destinazione ma NON nell'origine verranno eliminati.
+La barra di progresso e l'ETA si basano sui Byte trasferiti, garantendo 
+fluidità anche con file di grandi dimensioni.
+L'output è limitato a un aggiornamento ogni 3 secondi per favorire 
+l'accessibilità con sintesi vocali.
 
 --------------------------------------------------------------------------------
 TUTORIAL: IL TUO PRIMO BACKUP
@@ -111,18 +100,17 @@ TUTORIAL: IL TUO PRIMO BACKUP
 2. VERIFICA (SIMULAZIONE)
    - Seleziona "2. Esegui SIMULAZIONE".
    - Scegli il preset "Lavoro".
-   - Osserva il log a video e la barra di progresso.
-   - Al termine, apri la cartella Logs e controlla che Robocopy abbia listato i file corretti senza errori.
+   - Osserva il log a video e la barra di progresso (aggiornamento ogni 3s).
+   - Al termine, controlla che Robocopy abbia listato i file corretti.
 
 3. ESECUZIONE
    - Seleziona "1. Esegui Backup".
    - Conferma il riepilogo.
-   - Attendi il completamento.
-   - Leggi il rapporto finale (Diff Size e %).
+   - Attendi il completamento e leggi il rapporto finale.
 
 --------------------------------------------------------------------------------
 DISCLAIMER
-Questo software esegue operazioni massiva sui file. Sebbene testato accuratamente, 
-l'autore non si assume responsabilità per perdite di dati derivanti da uso improprio 
-o malfunzionamenti. Usare sempre la modalità SIMULAZIONE prima di nuovi backup.
+Questo software esegue operazioni distruttive sulla destinazione (/MIR).
+Sebbene testato accuratamente, l'autore non si assume responsabilità per 
+perdite di dati. Usare sempre la modalità SIMULAZIONE prima di nuovi backup.
 ================================================================================
