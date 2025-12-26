@@ -20,7 +20,7 @@ except ImportError:
 APP_NAME = "Scriba"
 APP_VERSION = "2.1.0 di dicembre 2025"
 SETTINGS_FILE = "scriba_settings.json"
-REFRESH_RATE = 5.0
+REFRESH_RATE = 3.0
 PRESET_TEMPLATE = {
     "titolo": "Casual",
     "machine_id": "God's Machine",
@@ -118,67 +118,21 @@ def stampa_dettaglio_esteso(preset):
     print("="*60 + "\n")
 
 # --- NUOVO BLOCCO LOGICA BACKUP ---
-def get_dir_stats(path, user_exclusions=None):
-    """
-    Scansiona una cartella per contare file e dimensioni totali.
-    Necessario per il confronto 'Prima vs Dopo'.
-    """
-    total_size = 0
-    num_files = 0
-    num_folders = 0
-    safe_path = fix_long_path(path)
-    
-    if not os.path.exists(safe_path):
-        return 0, 0, 0
-
-    normalized_user_excl = []
-    if user_exclusions:
-        for p in user_exclusions:
-            normalized_user_excl.append(os.path.abspath(p).lower())
-
-    sys_excl_names = ["$RECYCLE.BIN", "System Volume Information", "Recovery"]
-
-    try:
-        for root, dirs, files in os.walk(safe_path, topdown=True):
-            # Filtro cartelle (in-place)
-            for i in range(len(dirs) - 1, -1, -1):
-                d_name = dirs[i]
-                d_full = os.path.join(root, d_name)
-                if d_name in sys_excl_names:
-                    del dirs[i]
-                    continue
-                if normalized_user_excl and os.path.abspath(d_full).lower() in normalized_user_excl:
-                    del dirs[i]
-                    continue
-
-            num_folders += len(dirs)
-            
-            for f in files:
-                if f.lower() in ["pagefile.sys", "hiberfil.sys", "swapfile.sys"]: continue
-                num_files += 1
-                try:
-                    total_size += os.path.getsize(os.path.join(root, f))
-                except: pass
-    except: pass
-    return num_files, num_folders, total_size
-
 def get_robocopy_plan(src, dst, user_exclusions=None):
     """
-    Esegue una simulazione rapida (/L) per contare quante operazioni 
-    (copie file + eliminazioni extra) verranno eseguite.
+    Esegue una simulazione rapida (/L) per ottenere:
+    1. Numero di operazioni previste (files da copiare).
+    2. Byte totali da trasferire (per calcolo ETA preciso).
     """
-    # --- FIX CRITICO PER ROBOCOPY ---
-    # Robocopy non digerisce i prefissi \\?\ da riga di comando, li rimuoviamo solo per il comando CMD.
-    # Rimuoviamo anche lo slash finale se non è una root (es. C:\) per evitare problemi di escape delle virgolette.
-    
+    # Fix percorsi
     cmd_src = src.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_src.endswith("\\") and not cmd_src.endswith(":\\"): cmd_src = cmd_src.rstrip("\\")
     
     cmd_dst = dst.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_dst.endswith("\\") and not cmd_dst.endswith(":\\"): cmd_dst = cmd_dst.rstrip("\\")
 
-    # /L = List Only, /NDL = No Dir List (conta solo i file), /NJH/NJS = No Header/Summary
-    cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/NJH", "/NJS", "/NDL", "/NC", "/NS"]
+    # /L = List Only, /BYTES = Mostra dimensioni in byte, /NJH/NJS/NDL = output minimo
+    cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/BYTES", "/NJH", "/NJS", "/NDL", "/NC", "/NS"]
     
     # Esclusioni di sistema
     drive, tail = os.path.splitdrive(src)
@@ -188,11 +142,12 @@ def get_robocopy_plan(src, dst, user_exclusions=None):
     
     if user_exclusions:
         cmd.append("/XD")
-        # Anche le esclusioni devono essere pulite dal prefisso \\?\ per Robocopy
         clean_excl = [e.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "") for e in user_exclusions]
         cmd.extend(clean_excl)
 
-    ops_count = 0
+    files_to_copy = 0
+    bytes_to_copy = 0
+
     try:
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -201,39 +156,27 @@ def get_robocopy_plan(src, dst, user_exclusions=None):
             universal_newlines=True, encoding='cp850', errors='replace',
             startupinfo=startupinfo
         )
+        
         while True:
             line = process.stdout.readline()
             if not line and process.poll() is not None: break
+            
             if line and line.strip():
-                ops_count += 1
-    except Exception: return 0
-    return ops_count
-def parse_robocopy_stat_line(line):
-    """
-    Estrae TUTTI i numeri interi da una riga di testo, ignorando parole e simboli.
-    Funziona con qualsiasi formattazione (es. "Files : 10", "Files:10", "File: 10").
-    """
-    try:
-        # Sostituiamo i due punti e i tab con spazi per sicurezza
-        clean_line = line.replace(":", " ").replace("\t", " ")
-        parts = clean_line.split()
-        
-        # Estraiamo solo ciò che è numerico
-        nums = [int(x) for x in parts if x.isdigit()]
-        
-        # Una riga di statistiche valida di Robocopy ha almeno 2 o 3 numeri
-        if len(nums) >= 2:
-            return nums
-    except: pass
-    return None
-def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=False, 
-                        global_total=0, global_offset=0, global_start_time=0, current_task_name=""):
-    """
-    Esegue Robocopy con fix percorsi, ETA a finestra mobile e visualizzazione contestuale.
-    """
-    try: rate = REFRESH_RATE
-    except NameError: rate = 5.0
+                # Esempio linea: "   123456   C:\Percorso\File.ext"
+                parts = line.split(maxsplit=1) # Splitta solo al primo spazio bianco
+                if parts and parts[0].isdigit():
+                    size = int(parts[0])
+                    bytes_to_copy += size
+                    files_to_copy += 1
 
+    except Exception: return 0, 0
+    return files_to_copy, bytes_to_copy
+def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=False, 
+                        total_bytes_global=0, current_bytes_global=0, start_time_global=0, current_task_name=""):
+    """
+    Esegue Robocopy parsando i byte copiati per una barra di progresso accurata.
+    Cattura il sommario finale nativo di Robocopy per statistiche precise.
+    """
     # --- FIX PERCORSI ---
     cmd_src = src.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_src.endswith("\\") and not cmd_src.endswith(":\\"): cmd_src = cmd_src.rstrip("\\")
@@ -241,7 +184,8 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
     cmd_dst = dst.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
     if cmd_dst.endswith("\\") and not cmd_dst.endswith(":\\"): cmd_dst = cmd_dst.rstrip("\\")
 
-    cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/NDL", "/NJH", "/NP", "/BYTES"]
+    # RIMOSSI /NJH /NJS per avere il riepilogo finale da parsare alla fine
+    cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/NDL", "/NP", "/BYTES"]
     
     if user_exclusions:
         cmd.append("/XD")
@@ -254,19 +198,24 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW 
     
-    stats = {
-        "files_total": 0, "files_copied": 0, "files_extras": 0, "files_failed": 0,
-        "dirs_total": 0,  "dirs_created": 0, 
-        "bytes_copied": 0, "bytes_total": 0
+    # Struttura per contenere i dati grezzi del riepilogo Robocopy
+    final_stats = {
+        "dirs_total": 0, "dirs_copied": 0, "dirs_skipped": 0, "dirs_failed": 0,
+        "files_total": 0, "files_copied": 0, "files_skipped": 0, "files_failed": 0,
+        "bytes_total": 0, "bytes_copied": 0, "bytes_skipped": 0, "bytes_failed": 0
     }
     
-    processed_local = 0
+    local_bytes_copied = 0
     last_update_time = time.time()
     
-    # Variabili per ETA a finestra mobile
-    eta_history = [] # Lista di tuple (tempo, ops_totali_fino_a_quel_momento)
-    WINDOW_SECONDS = 20.0
+    # Variabili per ETA a finestra mobile (sui byte)
+    eta_history = [] 
+    WINDOW_SECONDS = 30.0
     
+    # Pattern per riconoscere le righe di riepilogo finale (Total, Copied, Skipped...)
+    summary_started = False
+    summary_lines = []
+
     try:
         process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -283,91 +232,104 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
                 
                 if line:
                     stripped = line.strip()
-                    lower_line = stripped.lower()
+                    # Scriviamo nel log tutto
                     f_log.write(line)
 
-                    # --- RILEVAMENTO RIGHE DI RIEPILOGO ---
-                    is_header = "total" in lower_line and "copied" in lower_line
-                    is_separator = "---" in stripped
-                    is_stat_line = (":" in line) and any(k in lower_line for k in ["file", "dir", "cartell", "byte", "total", "durata", "velocit", "finito", "speed", "ended"])
-                    is_summary = is_header or is_separator or is_stat_line
-
-                    # --- PARSING ROBUSTO ---
-                    if is_stat_line:
-                        nums = parse_robocopy_stat_line(line)
-                        if nums:
-                            if "dir" in lower_line or "cartell" in lower_line: 
-                                stats["dirs_total"] = nums[0]
-                                if len(nums) > 1: stats["dirs_created"] = nums[1]
-                            elif "file" in lower_line:
-                                stats["files_total"] = nums[0]
-                                if len(nums) > 1: stats["files_copied"] = nums[1]
-                                if len(nums) >= 5: stats["files_failed"] = nums[4]
-                                if len(nums) >= 6: stats["files_extras"] = nums[5]
-                            elif "byte" in lower_line:
-                                stats["bytes_total"] = nums[0]
-                                if len(nums) > 1: stats["bytes_copied"] = nums[1]
-
-                    # --- AGGIORNAMENTO BARRA ---
-                    if stripped and not is_summary:
-                        processed_local += 1
-                        current_time = time.time()
+                    # Rilevamento inizio riepilogo (Header finale)
+                    if "-----------" in stripped:
+                        summary_started = True
                         
-                        if current_time - last_update_time > 0.5: # Aggiorna ogni 0.5s per fluidità
-                            total_done = global_offset + processed_local
+                    if summary_started:
+                        summary_lines.append(line)
+                        continue # Smettiamo di parsare file, è il riepilogo
+                    
+                    # Parsing File Size per Progress Bar
+                    # Formato tipico con /BYTES: "   1234567   C:\Path\File.ext"
+                    # Ignoriamo header iniziale
+                    if not stripped: continue
+                    
+                    parts = stripped.split(maxsplit=1)
+                    if parts and parts[0].isdigit():
+                        file_size = int(parts[0])
+                        # Se è un file copiato (non SKIPPED), Robocopy lo lista.
+                        # Con /NDL, vediamo solo i file toccati/copiati.
+                        # Nota: /L (simulazione) lista tutto.
+                        
+                        local_bytes_copied += file_size
+                        
+                        current_time = time.time()
+                        if current_time - last_update_time > REFRESH_RATE: 
+                            total_done = current_bytes_global + local_bytes_copied
                             
-                            # Percentuale
                             perc = 0.0
-                            if global_total > 0:
-                                perc = (total_done / global_total) * 100
+                            if total_bytes_global > 0:
+                                perc = (total_done / total_bytes_global) * 100
                             if perc > 100: perc = 99.9
 
-                            # ETA (Finestra Mobile)
+                            # ETA Logic
                             eta_history.append((current_time, total_done))
-                            # Rimuovi dati vecchi fuori dalla finestra
                             while eta_history and (current_time - eta_history[0][0] > WINDOW_SECONDS):
                                 eta_history.pop(0)
                             
                             eta_str = "--:--"
                             if len(eta_history) > 1:
                                 delta_t = eta_history[-1][0] - eta_history[0][0]
-                                delta_ops = eta_history[-1][1] - eta_history[0][1]
+                                delta_bytes = eta_history[-1][1] - eta_history[0][1]
                                 
-                                if delta_t > 0 and delta_ops > 0:
-                                    speed = delta_ops / delta_t
-                                    remaining = global_total - total_done
-                                    if speed > 0:
-                                        sec_left = remaining / speed
-                                        if sec_left < 60:
-                                            eta_str = f"{int(sec_left)}s"
+                                if delta_t > 0 and delta_bytes > 0:
+                                    speed_bps = delta_bytes / delta_t
+                                    remaining = total_bytes_global - total_done
+                                    if speed_bps > 0:
+                                        sec_left = remaining / speed_bps
+                                        if sec_left < 60: eta_str = f"{int(sec_left)}s"
                                         else:
                                             m, s = divmod(int(sec_left), 60)
                                             h, m = divmod(m, 60)
                                             if h > 0: eta_str = f"{h}h{m}m"
                                             else: eta_str = f"{m}m{s}s"
                             
-                            # Formattazione Visuale
-                            task_lbl = f"[{current_task_name[:10]}]" if current_task_name else ""
+                            # Visual
+                            file_name = parts[1] if len(parts) > 1 else "..."
+                            short_name = smart_truncate(os.path.basename(file_name), 40)
+                            task_lbl = f"[{current_task_name[:10]}]"
                             
-                            parts = stripped.split("\t")
-                            raw_file = parts[-1].strip() if parts else stripped
-                            file_name = os.path.basename(raw_file)
-                            # Troncatura intelligente
-                            avail_space = 79 - 25 - len(task_lbl) # Spazio rimanente approx
-                            if avail_space < 10: avail_space = 10
-                            short_name = smart_truncate(file_name, avail_space)
-                            
-                            # Output con padding finale per pulizia
-                            out_str = f"\r{perc:5.1f}% [{eta_str:>5}] {task_lbl} {short_name}"
-                            sys.stdout.write(f"{out_str:<85}") # Padding fisso a 85 char
+                            sys.stdout.write(f"\r{perc:5.1f}% [{eta_str:>5}] {task_lbl} {short_name:<40}")
                             sys.stdout.flush()
                             last_update_time = current_time
 
-        return stats, processed_local
+        # A processo finito, parsiamo summary_lines per riempire final_stats
+        # Esempio riga: "   Dirs :      10         0        10         0         0         0"
+        # Colonne: Total, Copied, Skipped, Mismatch, FAILED, Extras
+        for l in summary_lines:
+            l_low = l.lower()
+            if ":" not in l: continue
+            
+            # Pulizia per split
+            nums = [int(x) for x in l.replace(":", " ").split() if x.isdigit()]
+            # Di solito Robocopy ha 6 colonne numeriche
+            if len(nums) < 6: continue
+            
+            if "dir" in l_low or "cartell" in l_low:
+                final_stats["dirs_total"] = nums[0]
+                final_stats["dirs_copied"] = nums[1]
+                final_stats["dirs_skipped"] = nums[2]
+                final_stats["dirs_failed"] = nums[4]
+            elif "file" in l_low:
+                final_stats["files_total"] = nums[0]
+                final_stats["files_copied"] = nums[1]
+                final_stats["files_skipped"] = nums[2]
+                final_stats["files_failed"] = nums[4]
+            elif "byte" in l_low:
+                final_stats["bytes_total"] = nums[0]
+                final_stats["bytes_copied"] = nums[1]
+                final_stats["bytes_skipped"] = nums[2]
+                final_stats["bytes_failed"] = nums[4]
+
+        return final_stats, local_bytes_copied
 
     except Exception as e:
         print(f"\nErrore Robocopy: {e}")
-        return stats, 0
+        return final_stats, 0
 def esegui_backup(preset_index=None, simulazione=False):
     settings = load_settings()
     if settings is None: return 
@@ -435,7 +397,8 @@ def esegui_backup(preset_index=None, simulazione=False):
     # FASE 1: INVENTARIO (DRY-RUN)
     # ============================================================
     print(f"\n--- FASE 1/2: Inventario e Analisi ({len(cartelle_valide)} cartelle) ---")
-    grand_total_ops = 0
+    grand_total_files = 0
+    grand_total_bytes = 0
     tasks_plan = [] 
 
     for i, coppia in enumerate(cartelle_valide):
@@ -446,15 +409,18 @@ def esegui_backup(preset_index=None, simulazione=False):
         sys.stdout.write(f"\r Analisi {i+1}/{len(cartelle_valide)}: {nome_breve:<35} ")
         sys.stdout.flush()
         
-        ops = get_robocopy_plan(src, dst, user_exclusions=preset.get("esclusioni", []))
-        grand_total_ops += ops
+        # Ora get_robocopy_plan ritorna (files, bytes)
+        f_cnt, b_cnt = get_robocopy_plan(src, dst, user_exclusions=preset.get("esclusioni", []))
+        grand_total_files += f_cnt
+        grand_total_bytes += b_cnt
         tasks_plan.append({
             "coppia": coppia,
             "src": src, "dst": dst,
-            "ops_stimate": ops
+            "files_stimate": f_cnt,
+            "bytes_stimate": b_cnt
         })
     
-    print(f"\n Completato. Operazioni totali previste: {grand_total_ops}")
+    print(f"\n Completato. Totale stimato: {format_size(grand_total_bytes)} ({grand_total_files} file)")
     time.sleep(1)
 
     # ============================================================
@@ -462,20 +428,15 @@ def esegui_backup(preset_index=None, simulazione=False):
     # ============================================================
     print(f"\n--- FASE 2/2: Esecuzione {tipo_run} ---")
     
-    global_processed_counter = 0
+    global_bytes_processed = 0
     phase2_start_time = time.time()
     
-    # Variabili per statistiche "Prima vs Dopo"
-    total_pre_files = 0
-    total_post_files = 0
-    total_pre_size = 0
-    total_post_size = 0
-    
-    # Contatori Robocopy
-    robocopy_files_ok = 0
-    robocopy_files_fail = 0
-    robocopy_files_deleted = 0
-    robocopy_bytes_transferred = 0
+    # Accumulatori per Report Finale (dai dati nativi Robocopy)
+    report_files_copied = 0
+    report_bytes_copied = 0
+    report_files_failed = 0
+    report_files_skipped = 0
+    report_bytes_skipped = 0
 
     for i, task in enumerate(tasks_plan):
         coppia = task["coppia"]
@@ -485,38 +446,29 @@ def esegui_backup(preset_index=None, simulazione=False):
         
         task_start_time = time.time() # Tempo inizio task
 
-        # 1. MISURAZIONE PRE
-        if not simulazione:
-            f_pre, d_pre, s_pre = get_dir_stats(dst_path, preset.get("esclusioni", []))
-            total_pre_files += f_pre
-            total_pre_size += s_pre
-        
-        # 2. ESECUZIONE
-        stats, ops_fatte = run_robocopy_engine(
+        # ESECUZIONE
+        stats, bytes_fatti = run_robocopy_engine(
             task["src"],
             task["dst"],
             log_file,
             user_exclusions=preset.get("esclusioni", []),
             is_simulation=simulazione,
-            global_total=grand_total_ops,
-            global_offset=global_processed_counter,
-            global_start_time=phase2_start_time,
+            total_bytes_global=grand_total_bytes,
+            current_bytes_global=global_bytes_processed,
+            start_time_global=phase2_start_time,
             current_task_name=nome_dir
         )
         
-        global_processed_counter += ops_fatte
-        robocopy_files_ok += stats["files_copied"]
-        robocopy_files_fail += stats["files_failed"]
-        robocopy_files_deleted += stats["files_extras"]
-        robocopy_bytes_transferred += stats["bytes_copied"]
+        global_bytes_processed += bytes_fatti
+        
+        # Accumulo statistiche finali
+        report_files_copied += stats.get("files_copied", 0)
+        report_files_failed += stats.get("files_failed", 0)
+        report_files_skipped += stats.get("files_skipped", 0)
+        report_bytes_copied += stats.get("bytes_copied", 0)
+        report_bytes_skipped += stats.get("bytes_skipped", 0)
 
-        # 3. MISURAZIONE POST
-        if not simulazione:
-            f_post, d_post, s_post = get_dir_stats(dst_path, preset.get("esclusioni", []))
-            total_post_files += f_post
-            total_post_size += s_post
-            
-        # 4. REPORT TASK COMPLETATO
+        # REPORT TASK COMPLETATO
         task_duration = time.time() - task_start_time
         m_task, s_task = divmod(int(task_duration), 60)
         # \r sovrascrive la barra di progresso, padding massiccio per pulizia residui
@@ -526,7 +478,7 @@ def esegui_backup(preset_index=None, simulazione=False):
     print("\n" + "="*60) 
 
     # ============================================================
-    # REPORT FINALE (COMPARATIVO)
+    # REPORT FINALE
     # ============================================================
     if not simulazione and settings:
         preset["ultimo_backup"] = datetime.date.today().strftime("%Y-%m-%d")
@@ -540,62 +492,32 @@ def esegui_backup(preset_index=None, simulazione=False):
     print("="*60)
     print(f"Tempo Totale:     {int(h_tot):02d}:{int(m_tot):02d}:{s_tot:06.3f}")
     
-    if simulazione:
-        print("NOTA: In simulazione le statistiche 'Prima vs Dopo' non vengono calcolate.")
-        print(f"Operazioni simulate: {robocopy_files_ok}")
-    else:
-        # Calcolo Differenze
-        diff_size = total_post_size - total_pre_size
-        diff_files = total_post_files - total_pre_files
-        
-        perc_size = 0.0
-        if total_pre_size > 0:
-            perc_size = (diff_size / total_pre_size) * 100
-        elif total_post_size > 0: # Se prima era vuoto ed è cresciuto
-            perc_size = 100.0
+    # Velocità Media Reale
+    speed_str = "0.00 B/s"
+    if total_time > 0 and report_bytes_copied > 0:
+        speed_val = report_bytes_copied / total_time
+        speed_str = f"{format_size(speed_val)}/s"
 
-        sign_s = "+" if diff_size >= 0 else ""
-        sign_f = "+" if diff_files >= 0 else ""
+    print("-" * 60)
+    print(f"{'METRICA':<20} {'COPIATO':<15} {'SCHIVATO (Skip)':<15} {'TOTALI'}")
+    print("-" * 60)
+    
+    # Totali calcolati
+    tot_f = report_files_copied + report_files_skipped + report_files_failed
+    tot_b = report_bytes_copied + report_bytes_skipped # Approx, mancano i failed
+    
+    print(f"{'File':<20} {str(report_files_copied):<15} {str(report_files_skipped):<15} {tot_f}")
+    print(f"{'Dati (Bytes)':<20} {format_size(report_bytes_copied):<15} {format_size(report_bytes_skipped):<15} {format_size(tot_b)}")
+    
+    print("-" * 60)
+    print(f"Velocità Media: {speed_str}")
+    print(f"Errori Critici: {report_files_failed}")
 
-        print("-" * 60)
-        print(f"{'METRICA':<15} {'PRIMA':<15} {'DOPO':<15} {'DIFFERENZA'}")
-        print("-" * 60)
-        
-        # Riga Dimensioni
-        s_pre_str = format_size(total_pre_files).replace(" B", "").replace(" KB", "") # Hack estetico veloce o usa format_size normale
-        # Usiamo format_size normale che è più sicuro
-        print(f"{'Dimensioni':<15} {format_size(total_pre_size):<15} {format_size(total_post_size):<15} {sign_s}{format_size(diff_size)} ({sign_s}{perc_size:.2f}%)")
-        
-        # Riga File
-        print(f"{'File Totali':<15} {str(total_pre_files):<15} {str(total_post_files):<15} {sign_f}{diff_files}")
-        
-        print("-" * 60)
-        
-        # --- SEZIONE PERFORMANCE & IMPATTO ---
-        print("PERFORMANCE & IMPATTO:")
-        
-        # 1. Velocità Media
-        speed_str = "0.00 B/s"
-        if total_time > 0 and robocopy_bytes_transferred > 0:
-            speed_val = robocopy_bytes_transferred / total_time
-            speed_str = f"{format_size(speed_val)}/s"
-        print(f" - Velocità Media:       {speed_str}")
-
-        # 2. Impatto Modifiche
-        impact_perc = 0.0
-        if total_post_files > 0:
-            impact_perc = (robocopy_files_ok / total_post_files) * 100
-        print(f" - File Elaborati:       {robocopy_files_ok} ({impact_perc:.1f}% del totale attuale)")
-        
-        # 3. Altri Dettagli
-        print(f" - File Eliminati (Mir): {robocopy_files_deleted}")
-        print(f" - Errori Critici:       {robocopy_files_fail}")
-
-        if robocopy_files_fail > 0:
-            print("\n" + "!"*60)
-            print(f" ATTENZIONE: {robocopy_files_fail} file NON sono stati copiati per errore.")
-            print(" CONTROLLARE I LOG NELLA CARTELLA DI DESTINAZIONE!")
-            print("!"*60)
+    if report_files_failed > 0:
+        print("\n" + "!"*60)
+        print(f" ATTENZIONE: {report_files_failed} file NON sono stati copiati per errore.")
+        print(" CONTROLLARE I LOG NELLA CARTELLA DI DESTINAZIONE!")
+        print("!"*60)
 
     print("="*60)
 
@@ -610,9 +532,6 @@ def esegui_backup(preset_index=None, simulazione=False):
     else:
         if os.path.exists(log_dir):
             print(f"\nLogs salvati in: {log_dir}")
-            if input("Aprire cartella log? (s/n): ").lower() == 's':
-                try: os.startfile(log_dir)
-                except: subprocess.call(['explorer', log_dir])
         input("\nPremi INVIO per tornare al menu...")
 # --- FUNZIONI DI MENU ---
 
