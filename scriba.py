@@ -1,5 +1,10 @@
 # Scriba by Gabriele Battaglia (IZ4APU)
 # Data concepimento mercoledì 21 novembre 2025.
+# TODO:
+# - Valutare suddivisione in moduli (engine.py, ui.py, settings.py)
+# - Implementare rotazione log con timestamp invece di sovrascrittura
+# - Aggiungere unit test per le funzioni di utility (fix_long_path, format_size)
+
 import os
 import json
 import subprocess
@@ -18,7 +23,7 @@ except ImportError:
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.1.0 di dicembre 2025"
+APP_VERSION = "2.4.0 di gennaio 2026"
 SETTINGS_FILE = "scriba_settings.json"
 REFRESH_RATE = 3.0
 PRESET_TEMPLATE = {
@@ -28,7 +33,8 @@ PRESET_TEMPLATE = {
     "ultimo_backup": None,
     "root_destinazione": "",
     "coppie_cartelle": [],
-    "esclusioni": []
+    "esclusioni": [],
+    "storico_stats": {}
 }
 
 # --- GESTIONE DATI E SICUREZZA ---
@@ -134,11 +140,14 @@ def get_robocopy_plan(src, dst, user_exclusions=None):
     # /L = List Only, /BYTES = Mostra dimensioni in byte, /NJH/NJS/NDL = output minimo
     cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/BYTES", "/NJH", "/NJS", "/NDL", "/NC", "/NS"]
     
-    # Esclusioni di sistema
+    # Esclusioni GLOBALI (Sicure)
+    cmd.extend(["/XD", "$RECYCLE.BIN", "System Volume Information"])
+    cmd.extend(["/XF", "pagefile.sys", "hiberfil.sys", "swapfile.sys"])
+
+    # Esclusioni ROOT-ONLY (Nomi generici)
     drive, tail = os.path.splitdrive(src)
     if tail in ['\\', '/', ''] or src.endswith(':\\'):
-        cmd.extend(["/XD", "$RECYCLE.BIN", "System Volume Information", "Recovery"])
-        cmd.extend(["/XF", "pagefile.sys", "hiberfil.sys", "swapfile.sys"])
+        cmd.extend(["/XD", "Recovery"])
     
     if user_exclusions:
         cmd.append("/XD")
@@ -187,8 +196,18 @@ def run_robocopy_engine(src, dst, log_file, user_exclusions=None, is_simulation=
     # RIMOSSI /NJH /NJS per avere il riepilogo finale da parsare alla fine
     cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/NDL", "/NP", "/BYTES"]
     
+    # --- ESCLUSIONI AUTOMATICHE DI SISTEMA (REINTEGRATE) ---
+    # Globali (valide ovunque)
+    cmd.extend(["/XD", "$RECYCLE.BIN", "System Volume Information"])
+    cmd.extend(["/XF", "pagefile.sys", "hiberfil.sys", "swapfile.sys"])
+
+    # Root-Only (per evitare falsi positivi su cartelle utente tipo "D:\Lavoro\Recovery")
+    drive, tail = os.path.splitdrive(src)
+    if tail in ['\\', '/', ''] or src.endswith(':\\'):
+        cmd.extend(["/XD", "Recovery"])
+
     if user_exclusions:
-        cmd.append("/XD")
+        if "/XD" not in cmd: cmd.append("/XD")
         clean_excl = [e.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "") for e in user_exclusions]
         cmd.extend(clean_excl)
     
@@ -437,6 +456,10 @@ def esegui_backup(preset_index=None, simulazione=False):
     report_files_failed = 0
     report_files_skipped = 0
     report_bytes_skipped = 0
+    
+    # Accumulatori per Snapshot Totale Dataset (Stato attuale dell'archivio)
+    snapshot_files = 0
+    snapshot_bytes = 0
 
     for i, task in enumerate(tasks_plan):
         coppia = task["coppia"]
@@ -461,12 +484,16 @@ def esegui_backup(preset_index=None, simulazione=False):
         
         global_bytes_processed += bytes_fatti
         
-        # Accumulo statistiche finali
+        # Accumulo statistiche operazioni
         report_files_copied += stats.get("files_copied", 0)
         report_files_failed += stats.get("files_failed", 0)
         report_files_skipped += stats.get("files_skipped", 0)
         report_bytes_copied += stats.get("bytes_copied", 0)
         report_bytes_skipped += stats.get("bytes_skipped", 0)
+        
+        # Accumulo dimensioni totali dataset (Snapshot)
+        snapshot_files += stats.get("files_total", 0)
+        snapshot_bytes += stats.get("bytes_total", 0)
 
         # REPORT TASK COMPLETATO
         task_duration = time.time() - task_start_time
@@ -478,10 +505,27 @@ def esegui_backup(preset_index=None, simulazione=False):
     print("\n" + "="*60) 
 
     # ============================================================
-    # REPORT FINALE
+    # REPORT FINALE (COMPARATIVO)
     # ============================================================
+    
+    # Gestione Storico Stats
+    current_machine = get_machine_id()
+    if "storico_stats" not in preset: preset["storico_stats"] = {}
+    
+    # Recupero dati precedenti
+    prev_data = preset["storico_stats"].get(current_machine, {})
+    prev_files = prev_data.get("total_files", 0)
+    prev_bytes = prev_data.get("total_bytes", 0)
+    last_run_date = prev_data.get("last_run_date", "Mai")
+
+    # Aggiornamento dati (solo se non simulazione)
     if not simulazione and settings:
         preset["ultimo_backup"] = datetime.date.today().strftime("%Y-%m-%d")
+        preset["storico_stats"][current_machine] = {
+            "last_run_date": datetime.date.today().strftime("%Y-%m-%d"),
+            "total_files": snapshot_files,
+            "total_bytes": snapshot_bytes
+        }
         save_settings(settings)
     
     total_time = time.time() - start_total
@@ -492,26 +536,47 @@ def esegui_backup(preset_index=None, simulazione=False):
     print("="*60)
     print(f"Tempo Totale:     {int(h_tot):02d}:{int(m_tot):02d}:{s_tot:06.3f}")
     
-    # Velocità Media Reale
+    # Velocità Media Reale (basata sul trasferito effettivo)
     speed_str = "0.00 B/s"
     if total_time > 0 and report_bytes_copied > 0:
         speed_val = report_bytes_copied / total_time
         speed_str = f"{format_size(speed_val)}/s"
 
     print("-" * 60)
-    print(f"{'METRICA':<20} {'COPIATO':<15} {'SCHIVATO (Skip)':<15} {'TOTALI'}")
+    print(f"{'STATISTICHE OPERAZIONI (Sessione Corrente)':<50}")
     print("-" * 60)
     
-    # Totali calcolati
-    tot_f = report_files_copied + report_files_skipped + report_files_failed
-    tot_b = report_bytes_copied + report_bytes_skipped # Approx, mancano i failed
-    
-    print(f"{'File':<20} {str(report_files_copied):<15} {str(report_files_skipped):<15} {tot_f}")
-    print(f"{'Dati (Bytes)':<20} {format_size(report_bytes_copied):<15} {format_size(report_bytes_skipped):<15} {format_size(tot_b)}")
-    
+    tot_ops = report_files_copied + report_files_skipped + report_files_failed
+    print(f"File Copiati:    {str(report_files_copied):<10} ({format_size(report_bytes_copied)})")
+    print(f"File Invariati:  {str(report_files_skipped):<10} (Saltati)")
+    print(f"File Falliti:    {str(report_files_failed):<10}")
+    print(f"Velocità Media:  {speed_str}")
+
     print("-" * 60)
-    print(f"Velocità Media: {speed_str}")
-    print(f"Errori Critici: {report_files_failed}")
+    print(f"{'CONFRONTO STORICO ARCHIVIO (vs ' + last_run_date + ')':<50}")
+    print("-" * 60)
+
+    if prev_bytes == 0 and prev_files == 0:
+        print(" Nessun dato storico disponibile per il confronto.")
+        print(f" Stato Attuale:   {format_size(snapshot_bytes)} in {snapshot_files} files.")
+    else:
+        # Calcolo Differenze
+        diff_bytes = snapshot_bytes - prev_bytes
+        diff_files = snapshot_files - prev_files
+        
+        perc_bytes = 0.0
+        if prev_bytes > 0: perc_bytes = (diff_bytes / prev_bytes) * 100
+        
+        perc_files = 0.0
+        if prev_files > 0: perc_files = (diff_files / prev_files) * 100
+
+        sign_b = "+" if diff_bytes >= 0 else ""
+        sign_f = "+" if diff_files >= 0 else ""
+        
+        print(f"{'METRICA':<15} {'PRECEDENTE':<15} {'ATTUALE':<15} {'VARIAZIONE'}")
+        print("-" * 60)
+        print(f"{'Dimensioni':<15} {format_size(prev_bytes):<15} {format_size(snapshot_bytes):<15} {sign_b}{format_size(diff_bytes)} ({sign_b}{perc_bytes:.2f}%)")
+        print(f"{'Numero File':<15} {str(prev_files):<15} {str(snapshot_files):<15} {sign_f}{diff_files} ({sign_f}{perc_files:.2f}%)")
 
     if report_files_failed > 0:
         print("\n" + "!"*60)
