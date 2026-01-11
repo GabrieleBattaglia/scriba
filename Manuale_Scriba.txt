@@ -1,6 +1,6 @@
 ================================================================================
 SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 2.1.0, dicembre 2025.
+Versione: 2.4.0, gennaio 2026.
 ================================================================================
 
 DESCRIZIONE
@@ -10,7 +10,7 @@ per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'R
 Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
 estratte direttamente dal motore di copia per la massima precisione.
 
-CARATTERISTICHE TECNICHE (v2.1.0)
+CARATTERISTICHE TECNICHE (v2.4.0)
 ---------------------------------
 - Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
 - Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
@@ -18,7 +18,10 @@ CARATTERISTICHE TECNICHE (v2.1.0)
 - Sicurezza: Machine ID check per prevenire esecuzioni su macchine errate.
 - Feedback: Barra di avanzamento basata sul VOLUME DATI (Byte) per un ETA reale.
 - Accessibilità: Refresh della barra ogni 3 secondi (ottimizzato per screen reader).
-- Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche dai preset.
+- Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche e 
+  esclusione automatica GLOBALE di file/cartelle di sistema ($RECYCLE.BIN, etc.).
+- Storico & Trend: Monitoraggio automatico della crescita dell'archivio con 
+  confronto percentuale rispetto all'ultimo backup eseguito.
 
 INSTALLAZIONE ED ESECUZIONE
 ---------------------------
@@ -40,6 +43,7 @@ Ogni preset di backup è composto da:
 - Root Destinazione (es. H:\Backup).
 - Lista di coppie Cartella Origine -> Nome Destinazione.
 - Lista di cartelle da ESCLUDERE.
+- Storico Stats (automatico): Ultimo stato noto di file e byte.
 
 VOCI DI MENU
 ------------
@@ -48,12 +52,12 @@ VOCI DI MENU
    Lancia la procedura reale.
    - Fase 1: Inventario rapido (Byte/File previsti).
    - Fase 2: Esecuzione con monitoraggio costante dei dati trasferiti.
-   - Report Finale: Statistiche dettagliate (Copiati, Saltati, Falliti).
+   - Report Finale: Statistiche dettagliate della sessione e box COMPARATIVO 
+     con lo stato precedente dell'archivio (Delta Byte/File e %).
    - Opzione spegnimento PC al termine.
    
 2. ESEGUI SIMULAZIONE (Dry Run)
-   Esegue Robocopy con flag /L (List only). Utile per vedere cosa verrebbe 
-   modificato senza toccare i file.
+   Esegue Robocopy con flag /L (List only).
 
 3. VISUALIZZA PRESETS
    Dashboard con stato scadenze e ID Macchina.
@@ -63,7 +67,7 @@ VOCI DI MENU
 
 5. MODIFICA PRESET
    Permette di alterare dati, aggiungere/rimuovere origini o esclusioni, 
-   o "Adottare" un preset su una nuova macchina (aggiorna Machine ID).
+   o "Adottare" un preset su una nuova macchina.
 
 6. ELIMINA PRESET
    Rimuove la configurazione dal file JSON.
@@ -74,17 +78,13 @@ VOCI DI MENU
 LOGGING
 -------
 I file di log (.txt) vengono salvati nella destinazione sotto \Logs.
-Vengono sovrascritti a ogni sessione per risparmiare spazio. 
-Al termine della copia, viene visualizzato il percorso dei log.
+Vengono sovrascritti a ogni sessione. Al termine, viene visualizzato il percorso.
 
-NOTE SUL MOTORE DI COPIA
-------------------------
-Scriba usa la modalità MIRROR (/MIR). 
-I file presenti nella destinazione ma NON nell'origine verranno eliminati.
-La barra di progresso e l'ETA si basano sui Byte trasferiti, garantendo 
-fluidità anche con file di grandi dimensioni.
-L'output è limitato a un aggiornamento ogni 3 secondi per favorire 
-l'accessibilità con sintesi vocali.
+NOTE SULL'ARCHIVIO STORICO
+--------------------------
+Scriba tiene traccia delle dimensioni totali del tuo backup per ogni macchina. 
+Questo permette di visualizzare il "Trend di crescita" nel report finale.
+Le statistiche vengono aggiornate solo al termine di un backup REALE andato a buon fine.
 
 --------------------------------------------------------------------------------
 TUTORIAL: IL TUO PRIMO BACKUP
@@ -93,24 +93,19 @@ TUTORIAL: IL TUO PRIMO BACKUP
 1. CREAZIONE
    - Seleziona "4. Aggiungi Preset".
    - Nome: "Lavoro"; Periodicità: "1" (giorni).
-   - Destinazione: Seleziona il tuo disco esterno (es. E:\Backups).
+   - Destinazione: Seleziona il tuo disco esterno.
    - Origine: Seleziona la cartella "Documenti".
-   - Aggiungine altre se vuoi, poi rispondi "n" per salvare.
 
-2. VERIFICA (SIMULAZIONE)
-   - Seleziona "2. Esegui SIMULAZIONE".
-   - Scegli il preset "Lavoro".
-   - Osserva il log a video e la barra di progresso (aggiornamento ogni 3s).
-   - Al termine, controlla che Robocopy abbia listato i file corretti.
-
-3. ESECUZIONE
+2. ESECUZIONE (Snapshot iniziale)
    - Seleziona "1. Esegui Backup".
-   - Conferma il riepilogo.
-   - Attendi il completamento e leggi il rapporto finale.
+   - Al termine, Scriba salverà la dimensione attuale della cartella Documenti.
+
+3. SECONDO BACKUP (Monitoraggio crescita)
+   - La prossima volta che eseguirai il backup, Scriba ti dirà di quanto è 
+     cambiato il volume dei tuoi documenti rispetto alla volta precedente.
 
 --------------------------------------------------------------------------------
 DISCLAIMER
 Questo software esegue operazioni distruttive sulla destinazione (/MIR).
-Sebbene testato accuratamente, l'autore non si assume responsabilità per 
-perdite di dati. Usare sempre la modalità SIMULAZIONE prima di nuovi backup.
+Usare sempre la modalità SIMULAZIONE prima di nuovi backup.
 ================================================================================
