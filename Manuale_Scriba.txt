@@ -1,6 +1,6 @@
 ================================================================================
 SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 2.4.0, gennaio 2026.
+Versione: 2.4.2, gennaio 2026.
 ================================================================================
 
 DESCRIZIONE
@@ -10,14 +10,13 @@ per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'R
 Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
 estratte direttamente dal motore di copia per la massima precisione.
 
-CARATTERISTICHE TECNICHE (v2.4.0)
+CARATTERISTICHE TECNICHE (v2.4.2)
 ---------------------------------
 - Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
 - Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
 - UI: Interfaccia CLI con dialoghi di sistema nativi (wxPython).
 - Sicurezza: Machine ID check per prevenire esecuzioni su macchine errate.
-- Feedback: Barra di avanzamento basata sul VOLUME DATI (Byte) per un ETA reale.
-- Accessibilità: Refresh della barra ogni 3 secondi (ottimizzato per screen reader).
+- Feedback: Visualizzazione della cartella in elaborazione e report finale dettagliato.
 - Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche e 
   esclusione automatica GLOBALE di file/cartelle di sistema ($RECYCLE.BIN, etc.).
 - Storico & Trend: Monitoraggio automatico della crescita dell'archivio con 
