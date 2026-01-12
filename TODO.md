@@ -5,14 +5,11 @@
     - *Soluzione:* Dedurre le dimensioni "Prima" e "Dopo" direttamente dai log di Robocopy o tramite calcolo differenziale (Size Iniziale nota dal DB/Precedente + Copiati - Eliminati).
     - *Obiettivo:* Dimezzare i tempi di attesa pre/post copia.
 
-- [ ] **Ottimizzare Barra di Progresso:**
-    - Ridurre la frequenza di refresh a video per evitare rallentamenti su terminale.
-    - Stabilizzare l'algoritmo di calcolo ETA (Media mobile esponenziale o finestra temporale più ampia).
+- [x] **Gestione Output Robocopy:** Semplificata la gestione dell'output eliminando la barra di progresso in tempo reale a causa di limitazioni nel buffering di sistema.
 
 ## Robustezza
-- [ ] **Parsing Robocopy Agnostico:**
-    - Rendere il parsing dei log indipendente dalla lingua di sistema (attualmente cerca stringhe come "file", "dir" in italiano/inglese).
-    - Basarsi sulla struttura posizionale delle colonne di Robocopy.
+- [x] **Parsing Robocopy Agnostico:**
+    - Rendere il parsing dei log indipendente dalla lingua di sistema (basandosi sulla struttura delle colonne).
 
 ## Interfaccia e Accessibilità
 - [ ] **Sostituzione `wxPython` con Input CLI:**
