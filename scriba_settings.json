@@ -98,7 +98,7 @@
             "titolo": "Il mio piccino",
             "machine_id": "GabryMiniPC-GPD | Gabriele",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2026-01-12",
+            "ultimo_backup": "2026-01-14",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
             "coppie_cartelle": [
                 {
@@ -112,9 +112,9 @@
             ],
             "storico_stats": {
                 "GabryMiniPC-GPD | Gabriele": {
-                    "last_run_date": "2026-01-12",
-                    "total_files": 79599,
-                    "total_bytes": 14903846919
+                    "last_run_date": "2026-01-14",
+                    "total_files": 0,
+                    "total_bytes": 0
                 }
             }
         },

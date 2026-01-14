@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2025-12-23",
+            "ultimo_backup": "2025-12-28",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -98,7 +98,7 @@
             "titolo": "Il mio piccino",
             "machine_id": "GabryMiniPC-GPD | Gabriele",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2025-11-25",
+            "ultimo_backup": "2026-01-12",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
             "coppie_cartelle": [
                 {
@@ -109,7 +109,14 @@
             "esclusioni": [
                 "E:\\ReaperPeaks",
                 "E:\\Music"
-            ]
+            ],
+            "storico_stats": {
+                "GabryMiniPC-GPD | Gabriele": {
+                    "last_run_date": "2026-01-12",
+                    "total_files": 79599,
+                    "total_bytes": 14903846919
+                }
+            }
         },
         {
             "titolo": "VivoBookPro15",
