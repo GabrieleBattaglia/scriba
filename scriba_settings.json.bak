@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2025-12-28",
+            "ultimo_backup": "2026-01-25",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -92,7 +92,14 @@
                 }
             ],
             "machine_id": "GabryBat | Utente",
-            "esclusioni": []
+            "esclusioni": [],
+            "storico_stats": {
+                "GabryBat | Utente": {
+                    "last_run_date": "2026-01-25",
+                    "total_files": 99803,
+                    "total_bytes": 493646386679
+                }
+            }
         },
         {
             "titolo": "Il mio piccino",
