@@ -13,17 +13,12 @@ import time
 import sys
 import platform
 import shutil
-
-# Tenta di importare wxPython
-try:
-    import wx
-except ImportError:
-    print("ERRORE CRITICO: La libreria wxPython non è installata.")
-    sys.exit(1)
+import tkinter as tk
+from tkinter import filedialog
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.4.2 di gennaio 2026"
+APP_VERSION = "2.4.3 di febbraio 2026"
 SETTINGS_FILE = "scriba_settings.json"
 # ... (rest of constants remains same)
 REFRESH_RATE = 3.0
@@ -81,13 +76,12 @@ def fix_long_path(path):
 # --- INTERFACCIA UTENTE E UTILITIES ---
 
 def get_folder_dialog(message="Seleziona una cartella"):
-    app = wx.App(False)
-    dlg = wx.DirDialog(None, message, "", wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST)
-    selected_path = None
-    if dlg.ShowModal() == wx.ID_OK:
-        selected_path = dlg.GetPath()
-    dlg.Destroy()
-    return selected_path
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    folder_path = filedialog.askdirectory(title=message)
+    root.destroy()
+    return folder_path if folder_path else None
 
 def smart_truncate(text, max_len=45):
     if len(text) <= max_len:
