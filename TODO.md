@@ -12,7 +12,7 @@
     - Rendere il parsing dei log indipendente dalla lingua di sistema (basandosi sulla struttura delle colonne).
 
 ## Interfaccia e Accessibilità
-- [ ] **Sostituzione `wxPython` con Input CLI:**
+- [x] **Sostituzione `wxPython` con Input CLI:**
     - Sostituire i dialoghi grafici di selezione cartella con un sistema puramente CLI per rimuovere la dipendenza pesante.
     - **Vincolo Critico:** `tkinter` non è accessibile. La soluzione deve rimanere fruibile via screen reader (es. input path manuale con validazione o navigazione testuale semplice).
 
