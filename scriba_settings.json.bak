@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-01-29",
+            "ultimo_backup": "2026-02-03",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -99,9 +99,9 @@
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-01-29",
-                    "total_files": 100024,
-                    "total_bytes": 493696220380
+                    "last_run_date": "2026-02-03",
+                    "total_files": 99367,
+                    "total_bytes": 493292743659
                 }
             }
         },
@@ -142,6 +142,25 @@
                 }
             ],
             "esclusioni": []
+        },
+        {
+            "titolo": "PC-Ufficio",
+            "machine_id": "PC-Battaglia | GBattaglia",
+            "giorni_periodicita": 30,
+            "ultimo_backup": null,
+            "root_destinazione": "P:/BackUp",
+            "coppie_cartelle": [
+                {
+                    "origine": "C:/Users/GBattaglia/AppData/Roaming/nvda/addons",
+                    "nome_cartella": "addons"
+                },
+                {
+                    "origine": "C:/Users/GBattaglia/AppData/Roaming/Thunderbird",
+                    "nome_cartella": "Thunderbird"
+                }
+            ],
+            "esclusioni": [],
+            "storico_stats": {}
         }
     ]
 }

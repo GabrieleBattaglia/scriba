@@ -142,6 +142,31 @@
                 }
             ],
             "esclusioni": []
+        },
+        {
+            "titolo": "PC-Ufficio",
+            "machine_id": "PC-Battaglia | GBattaglia",
+            "giorni_periodicita": 30,
+            "ultimo_backup": "2026-02-05",
+            "root_destinazione": "P:/BackUp",
+            "coppie_cartelle": [
+                {
+                    "origine": "C:/Users/GBattaglia/AppData/Roaming/nvda/addons",
+                    "nome_cartella": "addons"
+                },
+                {
+                    "origine": "C:/Users/GBattaglia/AppData/Roaming/Thunderbird",
+                    "nome_cartella": "Thunderbird"
+                }
+            ],
+            "esclusioni": [],
+            "storico_stats": {
+                "PC-Battaglia | GBattaglia": {
+                    "last_run_date": "2026-02-05",
+                    "total_files": 4298,
+                    "total_bytes": 1180844930
+                }
+            }
         }
     ]
 }
