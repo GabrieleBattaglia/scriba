@@ -133,7 +133,7 @@
             "titolo": "VivoBookPro15",
             "machine_id": "VivoBookPro15GabryB | asus",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2025-11-26",
+            "ultimo_backup": "2026-03-10",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\VivoBookPro15",
             "coppie_cartelle": [
                 {
@@ -141,7 +141,14 @@
                     "nome_cartella": "Documenti"
                 }
             ],
-            "esclusioni": []
+            "esclusioni": [],
+            "storico_stats": {
+                "VivoBookPro15GabryB | asus": {
+                    "last_run_date": "2026-03-10",
+                    "total_files": 19815,
+                    "total_bytes": 13288939255
+                }
+            }
         },
         {
             "titolo": "PC-Ufficio",
