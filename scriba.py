@@ -10,7 +10,6 @@ import json
 import subprocess
 import datetime
 import time
-import sys
 import platform
 import shutil
 import tkinter as tk
@@ -568,7 +567,7 @@ def modifica_preset():
                     root = preset['root_destinazione']
                     
                     print(f"\nStai rimuovendo: {target['origine']}")
-                    print(f"ATTENZIONE: Vuoi ELIMINARE anche la cartella di backup fisica?")
+                    print("ATTENZIONE: Vuoi ELIMINARE anche la cartella di backup fisica?")
                     print(f"Percorso: {os.path.join(root, nome_dir)}")
                     
                     conferma = input("Scrivi 'SI' per cancellare i dati, invio per tenerli: ").strip().upper()
