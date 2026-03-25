@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-02-23",
+            "ultimo_backup": "2026-03-21",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -99,9 +99,9 @@
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-02-23",
-                    "total_files": 109326,
-                    "total_bytes": 494528444747
+                    "last_run_date": "2026-03-21",
+                    "total_files": 96862,
+                    "total_bytes": 504452706222
                 }
             }
         },
@@ -133,7 +133,7 @@
             "titolo": "VivoBookPro15",
             "machine_id": "VivoBookPro15GabryB | asus",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2026-03-10",
+            "ultimo_backup": "2025-11-26",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\VivoBookPro15",
             "coppie_cartelle": [
                 {
@@ -141,14 +141,7 @@
                     "nome_cartella": "Documenti"
                 }
             ],
-            "esclusioni": [],
-            "storico_stats": {
-                "VivoBookPro15GabryB | asus": {
-                    "last_run_date": "2026-03-10",
-                    "total_files": 19815,
-                    "total_bytes": 13288939255
-                }
-            }
+            "esclusioni": []
         },
         {
             "titolo": "PC-Ufficio",
