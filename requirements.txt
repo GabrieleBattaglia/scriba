@@ -1,0 +1,7 @@
+# Requirements per Scriba
+# Al momento il progetto utilizza solo la Python Standard Library.
+# Non sono necessarie librerie esterne per l'esecuzione dello script.
+
+# Strumenti di sviluppo e build (opzionali)
+# pyinstaller  # Per generare l'eseguibile (.exe)
+# ruff         # Per l'analisi statica del codice
