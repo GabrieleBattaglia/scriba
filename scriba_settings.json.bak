@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-03-21",
+            "ultimo_backup": "2026-03-26",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -79,29 +79,21 @@
                     "nome_cartella": "User"
                 },
                 {
-                    "origine": "C:\\Users\\Utente\\.vscode",
-                    "nome_cartella": ".vscode"
-                },
-                {
                     "origine": "C:\\Users\\Utente\\AppData\\Roaming\\REAPER",
                     "nome_cartella": "REAPER"
                 },
                 {
                     "origine": "E:\\git\\Mine",
                     "nome_cartella": "Mine"
-                },
-                {
-                    "origine": "C:/Users/Utente/.gemini",
-                    "nome_cartella": ".gemini"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-03-21",
-                    "total_files": 96862,
-                    "total_bytes": 504452706222
+                    "last_run_date": "2026-03-26",
+                    "total_files": 115719,
+                    "total_bytes": 498043523016
                 }
             }
         },
