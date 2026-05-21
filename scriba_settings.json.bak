@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-04-20",
+            "ultimo_backup": "2026-05-12",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -67,10 +67,6 @@
                     "nome_cartella": "nvda"
                 },
                 {
-                    "origine": "C:\\Users\\Utente\\.ssh",
-                    "nome_cartella": ".ssh"
-                },
-                {
                     "origine": "C:\\Users\\Utente\\AppData\\Roaming\\Code\\User",
                     "nome_cartella": "User"
                 },
@@ -81,15 +77,19 @@
                 {
                     "origine": "E:\\git\\Mine",
                     "nome_cartella": "Mine"
+                },
+                {
+                    "origine": "C:/Users/Utente/.antigravity",
+                    "nome_cartella": ".antigravity"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-04-20",
-                    "total_files": 90656,
-                    "total_bytes": 498577711967
+                    "last_run_date": "2026-05-12",
+                    "total_files": 87060,
+                    "total_bytes": 499699071568
                 }
             }
         },
@@ -135,7 +135,7 @@
             "titolo": "PC-Ufficio",
             "machine_id": "PC-Battaglia | GBattaglia",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2026-03-05",
+            "ultimo_backup": "2026-04-23",
             "root_destinazione": "P:/BackUp",
             "coppie_cartelle": [
                 {
@@ -154,9 +154,9 @@
             "esclusioni": [],
             "storico_stats": {
                 "PC-Battaglia | GBattaglia": {
-                    "last_run_date": "2026-03-05",
-                    "total_files": 6837,
-                    "total_bytes": 1372578647
+                    "last_run_date": "2026-04-23",
+                    "total_files": 6767,
+                    "total_bytes": 1586556821
                 }
             }
         }
