@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-05-12",
+            "ultimo_backup": "2026-05-21",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -67,10 +67,6 @@
                     "nome_cartella": "nvda"
                 },
                 {
-                    "origine": "C:\\Users\\Utente\\.ssh",
-                    "nome_cartella": ".ssh"
-                },
-                {
                     "origine": "C:\\Users\\Utente\\AppData\\Roaming\\Code\\User",
                     "nome_cartella": "User"
                 },
@@ -81,15 +77,19 @@
                 {
                     "origine": "E:\\git\\Mine",
                     "nome_cartella": "Mine"
+                },
+                {
+                    "origine": "C:/Users/Utente/.antigravity",
+                    "nome_cartella": ".antigravity"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-05-12",
-                    "total_files": 87060,
-                    "total_bytes": 499699071568
+                    "last_run_date": "2026-05-21",
+                    "total_files": 95236,
+                    "total_bytes": 500562389702
                 }
             }
         },
