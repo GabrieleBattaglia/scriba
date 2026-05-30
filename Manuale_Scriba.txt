@@ -1,6 +1,6 @@
 ================================================================================
 SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 2.4.2, gennaio 2026.
+Versione: 2.5.1, maggio 2026.
 ================================================================================
 
 DESCRIZIONE
@@ -10,17 +10,18 @@ per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'R
 Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
 estratte direttamente dal motore di copia per la massima precisione.
 
-CARATTERISTICHE TECNICHE (v2.4.2)
+CARATTERISTICHE TECNICHE (v2.5.1)
 ---------------------------------
 - Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
 - Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
-- UI: Interfaccia CLI con dialoghi di sistema nativi (wxPython).
+- UI: Interfaccia CLI con dialoghi di sistema nativi (tkinter).
 - Sicurezza: Machine ID check per prevenire esecuzioni su macchine errate.
-- Feedback: Visualizzazione della cartella in elaborazione e report finale dettagliato.
+- Feedback: Visualizzazione della cartella in elaborazione con progresso in tempo reale, ETA e report finale dettagliato.
 - Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche e 
   esclusione automatica GLOBALE di file/cartelle di sistema ($RECYCLE.BIN, etc.).
 - Storico & Trend: Monitoraggio automatico della crescita dell'archivio con 
   confronto percentuale rispetto all'ultimo backup eseguito.
+- Accessibilità: Segnale acustico al completamento (successo/errore) e barra di avanzamento ottimizzata per screen reader (NVDA).
 
 INSTALLAZIONE ED ESECUZIONE
 ---------------------------
@@ -30,8 +31,7 @@ A. ESEGUIBILE (Consigliato per portabilità)
 
 B. SCRIPT PYTHON (Per sviluppo/modifica)
    Requisiti: Python 3.x, Windows 10/11.
-   1. Installare la dipendenza GUI: pip install wxPython
-   2. Lanciare lo script: python scriba.py
+   1. Lanciare lo script: python scriba.py
 
 STRUTTURA DEL PRESET
 --------------------
@@ -53,6 +53,9 @@ VOCI DI MENU
    - Fase 2: Esecuzione con monitoraggio costante dei dati trasferiti.
    - Report Finale: Statistiche dettagliate della sessione e box COMPARATIVO 
      con lo stato precedente dell'archivio (Delta Byte/File e %).
+   - Gestione Errori Inline: se il numero di errori di copia (es. file in uso,
+     accesso negato) è inferiore o uguale a 10, i dettagli vengono visualizzati 
+     direttamente a schermo al termine del backup con codice errore e percorso file.
    - Opzione spegnimento PC al termine.
    
 2. ESEGUI SIMULAZIONE (Dry Run)
@@ -76,8 +79,7 @@ VOCI DI MENU
 
 LOGGING
 -------
-I file di log (.txt) vengono salvati nella destinazione sotto \Logs.
-Vengono sovrascritti a ogni sessione. Al termine, viene visualizzato il percorso.
+I file di log (.txt) vengono salvati nella destinazione sotto \Logs con timestamp (es. Nome-YYYY-MM-DD_HH-MM.txt) per non sovrascrivere lo storico delle sessioni. Vengono mantenuti per un massimo di 30 giorni, dopodiché vengono ripuliti automaticamente.
 
 NOTE SULL'ARCHIVIO STORICO
 --------------------------
