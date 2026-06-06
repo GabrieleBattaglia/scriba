@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-05-12",
+            "ultimo_backup": "2026-05-30",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -87,9 +87,9 @@
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-05-12",
-                    "total_files": 87060,
-                    "total_bytes": 499699071568
+                    "last_run_date": "2026-05-30",
+                    "total_files": 95582,
+                    "total_bytes": 500296679455
                 }
             }
         },
