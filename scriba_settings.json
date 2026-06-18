@@ -149,14 +149,18 @@
                 {
                     "origine": "G:/Il mio Drive/Genus Bononiae",
                     "nome_cartella": "Genus Bononiae"
+                },
+                {
+                    "origine": "E:/git",
+                    "nome_cartella": "git"
                 }
             ],
             "esclusioni": [],
             "storico_stats": {
                 "PC-Battaglia | GBattaglia": {
                     "last_run_date": "2026-06-18",
-                    "total_files": 4256,
-                    "total_bytes": 1648804973
+                    "total_files": 4265,
+                    "total_bytes": 1651899945
                 }
             }
         }
