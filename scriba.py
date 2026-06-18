@@ -20,7 +20,7 @@ from tkinter import filedialog
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.6.0 di giugno 2026"
+APP_VERSION = "2.6.1 di giugno 2026"
 SETTINGS_FILE = "scriba_settings.json"
 # ... (rest of constants remains same)
 REFRESH_RATE = 3.0
@@ -203,7 +203,12 @@ def build_robocopy_cmd(src: str, dst: str, user_exclusions: Optional[list[str]] 
         xd_dirs.extend(clean_excl)
         
     cmd.extend(["/XD"] + xd_dirs)
-    cmd.extend(["/XF", "pagefile.sys", "hiberfil.sys", "swapfile.sys"])
+    xf_files = [
+        "pagefile.sys", "hiberfil.sys", "swapfile.sys",
+        "parent.lock", "*.lock", "*.parentlock",
+        "*.gsheet", "*.gdoc", "*.gslides", "*.gdraw", "*.gtable", "*.glink", "*.gform", "*.gmap"
+    ]
+    cmd.extend(["/XF"] + xf_files)
     
     return cmd
 
@@ -211,7 +216,7 @@ def parse_robocopy_error(line: str) -> Optional[dict]:
     """
     Esegue il parsing di una riga di robocopy contenente un errore e ne estrae i dettagli.
     """
-    match = re.search(r"ERROR\s+(\d+)\s+\((0x[0-9a-fA-F]+)\)(?:\s+(.*))?", line)
+    match = re.search(r"(?:ERROR|ERRORE)\s+(\d+)\s+\((0x[0-9a-fA-F]+)\)(?:\s+(.*))?", line)
     if match:
         err_num = match.group(1)
         err_hex = match.group(2)
@@ -291,38 +296,52 @@ def get_robocopy_plan(src: str, dst: str, user_exclusions: Optional[list[str]] =
         return 0, 0
     return files_to_copy, bytes_to_copy
 
-def _read_robocopy_lines(stream):
+def _read_robocopy_log_realtime(log_file: str, process: subprocess.Popen):
     """
-    Generatore che legge lo stdout di robocopy byte per byte e produce "righe"
-    spezzate sia su \n che su \r. Questo è fondamentale perché robocopy scrive
-    le percentuali di avanzamento (es. '  0%  1%  2% ... 100%') usando \r senza \n,
-    e la lettura riga per riga standard di Python le bloccherebbe fino alla riga completa.
+    Legge il file di log di robocopy carattere per carattere in tempo reale,
+    evitando il buffering della pipe standard di Windows.
     """
-    buf = []
-    while True:
-        ch = stream.read(1)
-        if not ch:  # EOF
-            if buf:
-                yield ''.join(buf)
+    start_wait = time.time()
+    while not os.path.exists(log_file) and process.poll() is None:
+        if time.time() - start_wait > 5.0:
             break
-        if ch == '\n':
-            yield ''.join(buf)
-            buf = []
-        elif ch == '\r':
-            if buf:
+        time.sleep(0.05)
+        
+    if not os.path.exists(log_file):
+        return
+
+    buf = []
+    with open(log_file, 'r', encoding='cp850', errors='replace') as f:
+        while True:
+            ch = f.read(1)
+            if not ch:
+                if process.poll() is not None:
+                    ch = f.read(1)
+                    if not ch:
+                        if buf:
+                            yield ''.join(buf)
+                        break
+                else:
+                    time.sleep(0.05)
+                    continue
+            
+            if ch == '\n':
                 yield ''.join(buf)
                 buf = []
-            # Ignoriamo \r isolati (usati da robocopy per sovrascrivere la riga)
-        else:
-            buf.append(ch)
+            elif ch == '\r':
+                if buf:
+                    yield ''.join(buf)
+                    buf = []
+            else:
+                buf.append(ch)
 
 def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Optional[list[str]] = None, is_simulation: bool = False, 
                         total_bytes_global: int = 0, current_bytes_global: int = 0, start_time_global: float = 0.0, current_task_name: str = "") -> tuple[dict[str, int], int, list[dict]]:
     """
-    Esegue Robocopy e cattura il suo output in tempo reale.
+    Esegue Robocopy e cattura il suo output in tempo reale leggendo il log su file.
     Senza il flag /NP, robocopy emette percentuali di progresso per ogni file
-    usando \r (carriage return). Leggiamo byte per byte per catturarle dal vivo.
-    Scrive il log e restituisce le statistiche finali.
+    usando \r (carriage return). Leggiamo il file di log per catturarle dal vivo.
+    Restituisce le statistiche finali.
     """
     cmd = build_robocopy_cmd(src, dst, user_exclusions, is_simulation, is_plan=False)
     
@@ -341,90 +360,83 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
     bytes_fatti_task = 0
     last_update_time = 0
     summary_started = False
-    # Dimensione del file attualmente in corso di copia (per calcolo progresso parziale)
     current_file_size = 0
     current_file_fraction = 0.0
-    # Regex per catturare le percentuali scritte da robocopy (es. "  67.3%", " 100%")
     pct_re = re.compile(r'^\s*(\d+\.?\d*)%\s*$')
 
     try:
+        # Scriviamo l'intestazione iniziale nel log prima di lanciare Robocopy
+        with open(log_file, 'w', encoding='cp850', errors='replace') as f_log:
+            f_log.write(f"--- AVVIO: {datetime.datetime.now()} ---\nSRC: {src}\nDST: {dst}\n\n")
+            
+        # Aggiungiamo l'argomento per salvare su log in append
+        cmd.append(f"/LOG+:{log_file}")
+        
         process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            encoding='cp850', errors='replace',
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             startupinfo=startupinfo
         )
         
         summary_lines = []
 
-        with open(log_file, 'w', encoding='utf-8') as f_log:
-            f_log.write(f"--- AVVIO: {datetime.datetime.now()} ---\nSRC: {src}\nDST: {dst}\n\n")
-            for segment in _read_robocopy_lines(process.stdout):
-                stripped = segment.strip()
-                if not stripped:
-                    continue
+        for segment in _read_robocopy_log_realtime(log_file, process):
+            stripped = segment.strip()
+            if not stripped:
+                continue
+            
+            # --- Cattura percentuali di progresso (es. "  45.2%") ---
+            pct_match = pct_re.match(stripped)
+            if pct_match:
+                pct_val = float(pct_match.group(1))
+                current_file_fraction = pct_val / 100.0
                 
-                # --- Cattura percentuali di progresso (es. "  45.2%") ---
-                pct_match = pct_re.match(stripped)
-                if pct_match:
-                    pct_val = float(pct_match.group(1))
-                    current_file_fraction = pct_val / 100.0
+                now_time = time.time()
+                if now_time - last_update_time >= REFRESH_RATE:
+                    partial_bytes = int(current_file_size * current_file_fraction)
+                    temp_global = current_bytes_global + bytes_fatti_task + partial_bytes
+                    print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
+                    last_update_time = now_time
+                continue
+            
+            if "-----------" in stripped:
+                summary_started = True
+            
+            if summary_started:
+                summary_lines.append(stripped)
+                continue
+            
+            # Check errori
+            if "ERROR" in stripped or "ERRORE" in stripped:
+                err_info = parse_robocopy_error(stripped)
+                if err_info:
+                    errori_task.append(err_info)
+            
+            # Check riga di file (contiene un backslash e non è metadato)
+            elif "\\" in stripped and not any(h in stripped for h in ["Source :", "Dest :", "Options :", "Started :", "Monitor :", "Origine =", "Destinazione :"]):
+                tokens = stripped.split()
+                file_size = None
+                for t in tokens:
+                    if t.isdigit():
+                        file_size = int(t)
+                        break
+                if file_size is not None:
+                    bytes_fatti_task += file_size
+                    current_file_size = 0
+                    current_file_fraction = 0.0
                     
                     now_time = time.time()
                     if now_time - last_update_time >= REFRESH_RATE:
-                        partial_bytes = int(current_file_size * current_file_fraction)
-                        temp_global = current_bytes_global + bytes_fatti_task + partial_bytes
+                        temp_global = current_bytes_global + bytes_fatti_task
                         print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
                         last_update_time = now_time
-                    continue
                 
-                # Riga completa (non percentuale): scriviamo nel log
-                f_log.write(stripped + '\n')
-                
-                if "-----------" in stripped:
-                    summary_started = True
-                
-                if summary_started:
-                    summary_lines.append(stripped)
-                    continue
-                
-                # Check errori
-                if "ERROR" in stripped:
-                    err_info = parse_robocopy_error(stripped)
-                    if err_info:
-                        errori_task.append(err_info)
-                
-                # Check riga di file (contiene un backslash e non è metadato)
-                elif "\\" in stripped and not any(h in stripped for h in ["Source :", "Dest :", "Options :", "Started :", "Monitor :"]):
-                    tokens = stripped.split()
-                    file_size = None
-                    for t in tokens:
-                        if t.isdigit():
-                            file_size = int(t)
-                            break
-                    if file_size is not None:
-                        # Questo file è stato completato (100% raggiunto o file piccolo copiato istantaneamente)
-                        bytes_fatti_task += file_size
-                        current_file_size = 0
+            elif any(tag in stripped for tag in ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]):
+                tokens = stripped.split()
+                for t in tokens:
+                    if t.isdigit():
+                        current_file_size = int(t)
                         current_file_fraction = 0.0
-                        
-                        now_time = time.time()
-                        if now_time - last_update_time >= REFRESH_RATE:
-                            temp_global = current_bytes_global + bytes_fatti_task
-                            print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
-                            last_update_time = now_time
-                    else:
-                        # Riga di inizio file senza dimensione parsata; potrebbe essere solo un path
-                        pass
-                    
-                # Riga di "Nuovo File" o "File Più Grande" con dimensione: cattura la dimensione
-                # per il calcolo percentuale parziale (es. "    New File    1234567   percorso\file.ext")
-                elif any(tag in stripped for tag in ["New File", "Newer", "new", "newer"]):
-                    tokens = stripped.split()
-                    for t in tokens:
-                        if t.isdigit():
-                            current_file_size = int(t)
-                            current_file_fraction = 0.0
-                            break
+                        break
 
         process.wait()
 
