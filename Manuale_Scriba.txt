@@ -1,6 +1,6 @@
 ================================================================================
 SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 2.6.1, giugno 2026.
+Versione: 2.8.0, giugno 2026.
 ================================================================================
 
 DESCRIZIONE
@@ -10,7 +10,7 @@ per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'R
 Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
 estratte direttamente dal motore di copia per la massima precisione.
 
-CARATTERISTICHE TECNICHE (v2.6.1)
+CARATTERISTICHE TECNICHE (v2.8.0)
 ---------------------------------
 - Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
 - Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
