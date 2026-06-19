@@ -14,16 +14,15 @@ import datetime
 import time
 import platform
 import shutil
-from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.6.1 di giugno 2026"
+APP_VERSION = "2.8.0 di giugno 2026"
 SETTINGS_FILE = "scriba_settings.json"
 # ... (rest of constants remains same)
-REFRESH_RATE = 3.0
+REFRESH_RATE = 1.0
 PRESET_TEMPLATE = {
     "titolo": "Casual",
     "machine_id": "God's Machine",
@@ -45,17 +44,17 @@ def get_machine_id() -> str:
         username = os.environ.get('USERNAME', 'Unknown')
     return f"{hostname} | {username}"
 
-def load_settings() -> Optional[dict]:
+def load_settings() -> dict | None:
     if not os.path.exists(SETTINGS_FILE):
         return {"presets": []}
     try:
-        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+        with open(SETTINGS_FILE, encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         print(f"ERRORE CRITICO caricamento settings: {e}")
         return None 
 
-def save_settings(data: Optional[dict]) -> None:
+def save_settings(data: dict | None) -> None:
     if data is None: return
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -77,7 +76,7 @@ def fix_long_path(path: str) -> str:
 
 # --- INTERFACCIA UTENTE E UTILITIES ---
 
-def get_folder_dialog(message: str = "Seleziona una cartella") -> Optional[str]:
+def get_folder_dialog(message: str = "Seleziona una cartella") -> str | None:
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
@@ -169,7 +168,7 @@ def play_completion_sound(success: bool = True) -> None:
 
 # --- LOGICA DI UTILITY PER I COMANDI E PARSING ROBOCOPY ---
 
-def build_robocopy_cmd(src: str, dst: str, user_exclusions: Optional[list[str]] = None, is_simulation: bool = False, is_plan: bool = False) -> list[str]:
+def build_robocopy_cmd(src: str, dst: str, user_exclusions: list[str] | None = None, is_simulation: bool = False, is_plan: bool = False) -> list[str]:
     """
     Costruisce il comando Robocopy in modo standardizzato, unificando le esclusioni
     ed evitando bug di posizionamento dei parametri.
@@ -212,7 +211,7 @@ def build_robocopy_cmd(src: str, dst: str, user_exclusions: Optional[list[str]] 
     
     return cmd
 
-def parse_robocopy_error(line: str) -> Optional[dict]:
+def parse_robocopy_error(line: str) -> dict | None:
     """
     Esegue il parsing di una riga di robocopy contenente un errore e ne estrae i dettagli.
     """
@@ -228,43 +227,47 @@ def parse_robocopy_error(line: str) -> Optional[dict]:
         }
     return None
 
-def print_progress_line(current_task_name: str, current_bytes_global: int, total_bytes_global: int, start_time_global: float) -> None:
-    """
-    Stampa una riga di avanzamento adatta a screen reader e CLI, aggiornandola sul posto.
-    """
-    elapsed_time = time.time() - start_time_global
-    speed_val = current_bytes_global / elapsed_time if elapsed_time > 0 else 0
-    speed_str = f"{format_size(speed_val)}/s"
-    
-    if total_bytes_global > 0:
-        percent = min(100.0, (current_bytes_global / total_bytes_global) * 100)
-        remaining_bytes = max(0, total_bytes_global - current_bytes_global)
-        eta_seconds = remaining_bytes / speed_val if speed_val > 0 else 0
-        
-        if eta_seconds > 0:
-            m_eta, s_eta = divmod(int(eta_seconds), 60)
-            h_eta, m_eta = divmod(m_eta, 60)
-            if h_eta > 0:
-                eta_str = f"{h_eta:02d}:{m_eta:02d}:{s_eta:02d}"
-            else:
-                eta_str = f"{m_eta:02d}:{s_eta:02d}"
-        else:
-            eta_str = "--:--"
-            
-        bar_len = 20
-        filled_len = int(round(bar_len * percent / 100))
-        bar = "#" * filled_len + "-" * (bar_len - filled_len)
-        
-        progress_text = f"\r   --> {current_task_name} | [{bar}] {percent:.1f}% ({format_size(current_bytes_global)}/{format_size(total_bytes_global)}) | {speed_str} | ETA: {eta_str}"
-    else:
-        m_el, s_el = divmod(int(elapsed_time), 60)
-        h_el, m_el = divmod(m_el, 60)
-        time_str = f"{h_el:02d}:{m_el:02d}:{s_el:02d}" if h_el > 0 else f"{m_el:02d}:{s_el:02d}"
-        progress_text = f"\r   --> {current_task_name} | Elaborati: {format_size(current_bytes_global)} | {speed_str} | Tempo: {time_str}"
-        
-    print(progress_text.ljust(99)[:99], end="", flush=True)
+def _format_eta(seconds: float) -> str:
+    """Formatta un valore di secondi in una stringa ETA compatta."""
+    if seconds <= 0:
+        return "--:--"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-def get_robocopy_plan(src: str, dst: str, user_exclusions: Optional[list[str]] = None) -> tuple[int, int]:
+def print_progress_line(task_name: str, task_bytes_done: int, task_bytes_total: int,
+                        global_bytes_done: int, global_bytes_total: int,
+                        task_start_time: float) -> None:
+    """
+    Stampa una riga di avanzamento compatta a due sezioni:
+      Sezione 1 (operazione corrente): nome, percentuale, ETA del task
+      Sezione 2 (globale): percentuale complessiva
+    Adatta a screen reader, entro 80 caratteri.
+    """
+    elapsed = time.time() - task_start_time
+    trunc_name = smart_truncate(task_name, 20)
+
+    # --- Sezione task corrente ---
+    if task_bytes_total > 0:
+        task_pct = min(100.0, (task_bytes_done / task_bytes_total) * 100)
+        task_speed = task_bytes_done / elapsed if elapsed > 0 else 0
+        task_remaining = max(0, task_bytes_total - task_bytes_done)
+        task_eta = task_remaining / task_speed if task_speed > 0 else 0
+        task_part = f"{trunc_name} {task_pct:.0f}% ~{_format_eta(task_eta)}"
+    else:
+        task_part = f"{trunc_name} ..."
+
+    # --- Sezione globale ---
+    if global_bytes_total > 0:
+        global_pct = min(100.0, (global_bytes_done / global_bytes_total) * 100)
+        global_part = f"Tot {global_pct:.0f}%"
+    else:
+        global_part = f"Tot: {format_size(global_bytes_done)}"
+
+    progress_text = f"\r {task_part} | {global_part}"
+    print(progress_text.ljust(79)[:79], end="", flush=True)
+
+def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = None) -> tuple[int, int]:
     """
     Esegue una simulazione rapida (/L) per ottenere:
     1. Numero di operazioni previste (files da copiare).
@@ -311,7 +314,7 @@ def _read_robocopy_log_realtime(log_file: str, process: subprocess.Popen):
         return
 
     buf = []
-    with open(log_file, 'r', encoding='cp850', errors='replace') as f:
+    with open(log_file, encoding='cp850', errors='replace') as f:
         while True:
             ch = f.read(1)
             if not ch:
@@ -335,8 +338,9 @@ def _read_robocopy_log_realtime(log_file: str, process: subprocess.Popen):
             else:
                 buf.append(ch)
 
-def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Optional[list[str]] = None, is_simulation: bool = False, 
-                        total_bytes_global: int = 0, current_bytes_global: int = 0, start_time_global: float = 0.0, current_task_name: str = "") -> tuple[dict[str, int], int, list[dict]]:
+def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: list[str] | None = None, is_simulation: bool = False,
+                        total_bytes_task: int = 0, total_bytes_global: int = 0, current_bytes_global: int = 0,
+                        start_time_global: float = 0.0, current_task_name: str = "") -> tuple[dict[str, int], int, list[dict]]:
     """
     Esegue Robocopy e cattura il suo output in tempo reale leggendo il log su file.
     Senza il flag /NP, robocopy emette percentuali di progresso per ogni file
@@ -354,12 +358,15 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
         "bytes_total": 0, "bytes_copied": 0, "bytes_skipped": 0, "bytes_failed": 0
     }
     
-    print_progress_line(current_task_name, current_bytes_global, total_bytes_global, start_time_global)
+    task_start_time = time.time()
+    print_progress_line(current_task_name, 0, total_bytes_task,
+                        current_bytes_global, total_bytes_global, task_start_time)
 
     errori_task = []
     bytes_fatti_task = 0
     last_update_time = 0
     summary_started = False
+    dash_count = 0
     current_file_size = 0
     current_file_fraction = 0.0
     pct_re = re.compile(r'^\s*(\d+\.?\d*)%\s*$')
@@ -393,13 +400,18 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
                 now_time = time.time()
                 if now_time - last_update_time >= REFRESH_RATE:
                     partial_bytes = int(current_file_size * current_file_fraction)
-                    temp_global = current_bytes_global + bytes_fatti_task + partial_bytes
-                    print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
+                    task_done = bytes_fatti_task + partial_bytes
+                    global_done = current_bytes_global + task_done
+                    print_progress_line(current_task_name, task_done, total_bytes_task,
+                                        global_done, total_bytes_global, task_start_time)
                     last_update_time = now_time
                 continue
             
             if "-----------" in stripped:
-                summary_started = True
+                dash_count += 1
+                if dash_count >= 4:
+                    summary_started = True
+                continue
             
             if summary_started:
                 summary_lines.append(stripped)
@@ -426,8 +438,9 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
                     
                     now_time = time.time()
                     if now_time - last_update_time >= REFRESH_RATE:
-                        temp_global = current_bytes_global + bytes_fatti_task
-                        print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
+                        global_done = current_bytes_global + bytes_fatti_task
+                        print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
+                                            global_done, total_bytes_global, task_start_time)
                         last_update_time = now_time
                 
             elif any(tag in stripped for tag in ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]):
@@ -458,8 +471,9 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
                 final_stats["bytes_skipped"] = nums[2]; final_stats["bytes_failed"] = nums[4]
 
         # Stampa progresso finale del task
-        temp_global = current_bytes_global + bytes_fatti_task
-        print_progress_line(current_task_name, temp_global, total_bytes_global, start_time_global)
+        global_done = current_bytes_global + bytes_fatti_task
+        print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
+                            global_done, total_bytes_global, task_start_time)
 
         return final_stats, bytes_fatti_task, errori_task
 
@@ -467,7 +481,7 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: Opti
         print(f"\nErrore Robocopy: {e}")
         return final_stats, 0, errori_task
 
-def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False) -> None:
+def esegui_backup(preset_index: int | None = None, simulazione: bool = False) -> None:
     settings = load_settings()
     if settings is None: return 
     
@@ -551,19 +565,17 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
         except Exception: pass 
     cleanup_old_logs(log_dir, max_age_days=30) 
 
-    # --- STIMA DELLE DIMENSIONI INIZIALI (ETA) ---
+    # --- ANALISI MODIFICHE (per-cartella e globale) ---
+    print("\nAnalisi modifiche in corso...")
+    task_bytes_plan = {}  # {nome_cartella: bytes_da_trasferire}
     total_bytes_global = 0
-    prev_data = preset.get("storico_stats", {}).get(current_machine, {})
-    total_bytes_global = prev_data.get("total_bytes", 0)
-
-    if total_bytes_global == 0:
-        print("\nCalcolo dimensioni iniziali in corso (richiesto solo al primo avvio)...")
-        for coppia in cartelle_valide:
-            src = fix_long_path(coppia["origine"])
-            dst = fix_long_path(os.path.join(root_dest, coppia["nome_cartella"]))
-            files_cnt, bytes_cnt = get_robocopy_plan(src, dst, user_exclusions=preset.get("esclusioni", []))
-            total_bytes_global += bytes_cnt
-        print(f"Dimensione totale stimata: {format_size(total_bytes_global)}")
+    for coppia in cartelle_valide:
+        src = fix_long_path(coppia["origine"])
+        dst = fix_long_path(os.path.join(root_dest, coppia["nome_cartella"]))
+        files_cnt, bytes_cnt = get_robocopy_plan(src, dst, user_exclusions=preset.get("esclusioni", []))
+        task_bytes_plan[coppia["nome_cartella"]] = bytes_cnt
+        total_bytes_global += bytes_cnt
+    print(f"Da trasferire: {format_size(total_bytes_global)} in {len(cartelle_valide)} cartelle")
 
     # --- ESECUZIONE ---
     print(f"\n--- Esecuzione {tipo_run} ---")
@@ -580,6 +592,7 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
     
     snapshot_files = 0
     snapshot_bytes = 0
+    snapshot_dirs = 0
     
     dettaglio_sessione = []
 
@@ -596,6 +609,7 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
             src, dst, log_file,
             user_exclusions=preset.get("esclusioni", []),
             is_simulation=simulazione,
+            total_bytes_task=task_bytes_plan.get(nome_dir, 0),
             total_bytes_global=total_bytes_global,
             current_bytes_global=current_bytes_global,
             start_time_global=start_time_global,
@@ -612,6 +626,7 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
         report_bytes_skipped += stats.get("bytes_skipped", 0)
         snapshot_files += stats.get("files_total", 0)
         snapshot_bytes += stats.get("bytes_total", 0)
+        snapshot_dirs += stats.get("dirs_total", 0)
 
         task_duration = time.time() - task_start_time
         
@@ -641,10 +656,20 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
     # Gestione Storico Stats
     if "storico_stats" not in preset: preset["storico_stats"] = {}
     
+    total_time = time.time() - start_total
+    avg_speed = report_bytes_copied / total_time if total_time > 0 else 0
+
     # Recupero dati precedenti
     prev_data = preset["storico_stats"].get(current_machine, {})
     prev_files = prev_data.get("total_files", 0)
     prev_bytes = prev_data.get("total_bytes", 0)
+    prev_dirs = prev_data.get("total_dirs", 0)
+    prev_files_copied = prev_data.get("files_copied", 0)
+    prev_bytes_copied = prev_data.get("bytes_copied", 0)
+    prev_files_skipped = prev_data.get("files_skipped", 0)
+    prev_files_failed = prev_data.get("files_failed", 0)
+    prev_duration = prev_data.get("duration_seconds", 0)
+    prev_speed = prev_data.get("avg_speed", 0)
     last_run_date = prev_data.get("last_run_date", "Mai")
 
     # Aggiornamento dati (solo se non simulazione)
@@ -653,11 +678,17 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
         preset["storico_stats"][current_machine] = {
             "last_run_date": datetime.date.today().strftime("%Y-%m-%d"),
             "total_files": snapshot_files,
-            "total_bytes": snapshot_bytes
+            "total_bytes": snapshot_bytes,
+            "total_dirs": snapshot_dirs,
+            "files_copied": report_files_copied,
+            "bytes_copied": report_bytes_copied,
+            "files_skipped": report_files_skipped,
+            "files_failed": report_files_failed,
+            "duration_seconds": round(total_time, 2),
+            "avg_speed": round(avg_speed, 2),
+            "num_sources": len(cartelle_valide)
         }
         save_settings(settings)
-    
-    total_time = time.time() - start_total
     m_tot, s_tot = divmod(total_time, 60)
     h_tot, m_tot = divmod(m_tot, 60)
     
@@ -691,7 +722,7 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
 
     # Tabella per-cartella
     print("-" * 60)
-    print("DETTAGLIO PER CARTENLLA")
+    print("DETTAGLIO PER CARTELLA")
     print("-" * 60)
     print(f"{'NOME':<20} {'COPIATI':<10} {'DIM. COPIATA':<15} {'TEMPO':<8} {'VEL. MEDIA'}")
     print("-" * 60)
@@ -733,24 +764,85 @@ def esegui_backup(preset_index: Optional[int] = None, simulazione: bool = False)
 
     if prev_bytes == 0 and prev_files == 0:
         print(" Nessun dato storico disponibile per il confronto.")
-        print(f" Stato Attuale:   {format_size(snapshot_bytes)} in {snapshot_files} files.")
+        print(f" Stato Attuale: {format_size(snapshot_bytes)} in {snapshot_files} file, {snapshot_dirs} cartelle.")
     else:
+        # --- Variazioni archivio ---
         diff_bytes = snapshot_bytes - prev_bytes
         diff_files = snapshot_files - prev_files
-        
-        perc_bytes = 0.0
-        if prev_bytes > 0: perc_bytes = (diff_bytes / prev_bytes) * 100
-        
-        perc_files = 0.0
-        if prev_files > 0: perc_files = (diff_files / prev_files) * 100
+        diff_dirs = snapshot_dirs - prev_dirs
+
+        perc_bytes = (diff_bytes / prev_bytes * 100) if prev_bytes > 0 else 0.0
+        perc_files = (diff_files / prev_files * 100) if prev_files > 0 else 0.0
+        perc_dirs = (diff_dirs / prev_dirs * 100) if prev_dirs > 0 else 0.0
 
         sign_b = "+" if diff_bytes >= 0 else ""
         sign_f = "+" if diff_files >= 0 else ""
-        
+        sign_d = "+" if diff_dirs >= 0 else ""
+
         print(f"{'METRICA':<15} {'PRECEDENTE':<15} {'ATTUALE':<15} {'VARIAZIONE'}")
         print("-" * 60)
         print(f"{'Dimensioni':<15} {format_size(prev_bytes):<15} {format_size(snapshot_bytes):<15} {sign_b}{format_size(diff_bytes)} ({sign_b}{perc_bytes:.2f}%)")
-        print(f"{'Numero File':<15} {str(prev_files):<15} {str(snapshot_files):<15} {sign_f}{diff_files} ({sign_f}{perc_files:.2f}%)")
+        print(f"{'Num. File':<15} {str(prev_files):<15} {str(snapshot_files):<15} {sign_f}{diff_files} ({sign_f}{perc_files:.2f}%)")
+        print(f"{'Num. Cartelle':<15} {str(prev_dirs):<15} {str(snapshot_dirs):<15} {sign_d}{diff_dirs} ({sign_d}{perc_dirs:.2f}%)")
+
+        # --- Confronto operazioni vs sessione precedente ---
+        if prev_files_copied > 0 or prev_files_skipped > 0:
+            print("-" * 60)
+            print(f"{'CONFRONTO OPERAZIONI (vs sessione precedente)':<50}")
+            print("-" * 60)
+            print(f"{'METRICA':<20} {'PRECEDENTE':<18} {'ATTUALE'}")
+            print("-" * 60)
+            print(f"{'File Copiati':<20} {str(prev_files_copied):<18} {report_files_copied}")
+            print(f"{'Dati Trasferiti':<20} {format_size(prev_bytes_copied):<18} {format_size(report_bytes_copied)}")
+            print(f"{'File Invariati':<20} {str(prev_files_skipped):<18} {report_files_skipped}")
+            print(f"{'File Falliti':<20} {str(prev_files_failed):<18} {report_files_failed}")
+
+        # --- Confronto prestazioni ---
+        if prev_duration > 0:
+            print("-" * 60)
+            print(f"{'CONFRONTO PRESTAZIONI':<50}")
+            print("-" * 60)
+
+            def _fmt_duration(secs):
+                m, s = divmod(int(secs), 60)
+                h, m = divmod(m, 60)
+                return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+            diff_dur = total_time - prev_duration
+            sign_dur = "+" if diff_dur >= 0 else "-"
+            print(f"{'Durata':<20} {_fmt_duration(prev_duration):<18} {_fmt_duration(total_time):<15} {sign_dur}{_fmt_duration(abs(diff_dur))}")
+
+            prev_speed_str = f"{format_size(prev_speed)}/s" if prev_speed > 0 else "N/A"
+            curr_speed_str = f"{format_size(avg_speed)}/s" if avg_speed > 0 else "N/A"
+            if prev_speed > 0 and avg_speed > 0:
+                speed_delta = ((avg_speed - prev_speed) / prev_speed) * 100
+                sign_sp = "+" if speed_delta >= 0 else ""
+                print(f"{'Velocita Media':<20} {prev_speed_str:<18} {curr_speed_str:<15} {sign_sp}{speed_delta:.1f}%")
+            else:
+                print(f"{'Velocita Media':<20} {prev_speed_str:<18} {curr_speed_str}")
+
+        # --- Tasso di crescita ---
+        if last_run_date != "Mai":
+            try:
+                last_d = datetime.datetime.strptime(last_run_date, "%Y-%m-%d").date()
+                days_elapsed = (datetime.date.today() - last_d).days
+                if days_elapsed > 0 and diff_bytes != 0:
+                    print("-" * 60)
+                    print(f"{'TASSO DI CRESCITA':<50}")
+                    print("-" * 60)
+                    bytes_per_day = diff_bytes / days_elapsed
+                    files_per_day = diff_files / days_elapsed
+                    sign_bpd = "+" if bytes_per_day >= 0 else ""
+                    sign_fpd = "+" if files_per_day >= 0 else ""
+                    print(f"  Periodo:          {days_elapsed} giorni dall'ultimo backup")
+                    print(f"  Dati:             {sign_bpd}{format_size(bytes_per_day)}/giorno")
+                    print(f"  File:             {sign_fpd}{files_per_day:.1f} file/giorno")
+                    # Proiezione annuale
+                    growth_annual = bytes_per_day * 365
+                    sign_ga = "+" if growth_annual >= 0 else ""
+                    print(f"  Proiezione Anno:  {sign_ga}{format_size(growth_annual)}")
+            except Exception:
+                pass
 
     # Errori inline se <= 10
     if report_files_failed > 0:
