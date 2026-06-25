@@ -19,7 +19,7 @@ from tkinter import filedialog
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.8.1 di giugno 2026"
+APP_VERSION = "2.8.3 di giugno 2026"
 SETTINGS_FILE = "scriba_settings.json"
 # ... (rest of constants remains same)
 REFRESH_RATE = 1.0
@@ -182,7 +182,7 @@ def build_robocopy_cmd(src: str, dst: str, user_exclusions: list[str] | None = N
         cmd_dst = cmd_dst.rstrip("\\")
 
     if is_plan:
-        cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/BYTES", "/NJH", "/NJS", "/NDL", "/NC"]
+        cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/BYTES", "/NJH", "/NJS", "/NDL"]
     else:
         cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/BYTES"]
         if is_simulation:
@@ -237,11 +237,11 @@ def _format_eta(seconds: float) -> str:
 
 def print_progress_line(task_name: str, task_bytes_done: int, task_bytes_total: int,
                         global_bytes_done: int, global_bytes_total: int,
-                        task_start_time: float) -> None:
+                        task_start_time: float, start_time_global: float) -> None:
     """
     Stampa una riga di avanzamento compatta a due sezioni:
       Sezione 1 (operazione corrente): nome, percentuale, ETA del task
-      Sezione 2 (globale): percentuale complessiva
+      Sezione 2 (globale): percentuale complessiva, ETA globale
     Adatta a screen reader, entro 80 caratteri.
     """
     elapsed = time.time() - task_start_time
@@ -258,20 +258,26 @@ def print_progress_line(task_name: str, task_bytes_done: int, task_bytes_total: 
         task_part = f"{trunc_name} ..."
 
     # --- Sezione globale ---
+    global_elapsed = time.time() - start_time_global if start_time_global > 0 else 0
     if global_bytes_total > 0:
         global_pct = min(100.0, (global_bytes_done / global_bytes_total) * 100)
-        global_part = f"Tot {global_pct:.0f}%"
+        global_speed = global_bytes_done / global_elapsed if global_elapsed > 0 else 0
+        global_remaining = max(0, global_bytes_total - global_bytes_done)
+        global_eta = global_remaining / global_speed if global_speed > 0 else 0
+        global_part = f"Tot {global_pct:.0f}% ~{_format_eta(global_eta)}"
     else:
         global_part = f"Tot: {format_size(global_bytes_done)}"
 
     progress_text = f"\r {task_part} | {global_part}"
     print(progress_text.ljust(79)[:79], end="\r", flush=True)
 
-def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = None) -> tuple[int, int]:
+def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = None,
+                     progress_prefix: str = "", progress_interval: float = 5.0) -> tuple[int, int]:
     """
     Esegue una simulazione rapida (/L) per ottenere:
     1. Numero di operazioni previste (files da copiare).
     2. Byte totali da trasferire (per calcolo ETA preciso).
+    Se progress_prefix è fornito, stampa un heartbeat ogni progress_interval secondi.
     """
     cmd = build_robocopy_cmd(src, dst, user_exclusions, is_simulation=True, is_plan=True)
     
@@ -287,13 +293,24 @@ def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = No
             startupinfo=startupinfo
         )
         
+        copy_tags = ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]
+        last_heartbeat = time.time()
         for line in process.stdout:
-            if line and line.strip():
-                parts = line.split(maxsplit=1)
-                if parts and parts[0].isdigit():
-                    size = int(parts[0])
-                    bytes_to_copy += size
-                    files_to_copy += 1
+            stripped = line.strip()
+            if stripped and any(tag in stripped for tag in copy_tags):
+                tokens = stripped.split()
+                for t in tokens:
+                    if t.isdigit():
+                        bytes_to_copy += int(t)
+                        files_to_copy += 1
+                        break
+            # Heartbeat periodico durante l'analisi di una singola cartella
+            if progress_prefix:
+                now = time.time()
+                if now - last_heartbeat >= progress_interval:
+                    status = f"\r {progress_prefix} ({files_to_copy} file, {format_size(bytes_to_copy)})"
+                    print(status.ljust(79)[:79], end="\r", flush=True)
+                    last_heartbeat = now
         process.wait()
     except Exception: 
         return 0, 0
@@ -360,7 +377,7 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: list
     
     task_start_time = time.time()
     print_progress_line(current_task_name, 0, total_bytes_task,
-                        current_bytes_global, total_bytes_global, task_start_time)
+                        current_bytes_global, total_bytes_global, task_start_time, start_time_global)
 
     errori_task = []
     bytes_fatti_task = 0
@@ -403,7 +420,7 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: list
                     task_done = bytes_fatti_task + partial_bytes
                     global_done = current_bytes_global + task_done
                     print_progress_line(current_task_name, task_done, total_bytes_task,
-                                        global_done, total_bytes_global, task_start_time)
+                                        global_done, total_bytes_global, task_start_time, start_time_global)
                     last_update_time = now_time
                 continue
             
@@ -423,57 +440,56 @@ def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: list
                 if err_info:
                     errori_task.append(err_info)
             
-            # Check riga di file (contiene un backslash e non è metadato)
-            elif "\\" in stripped and not any(h in stripped for h in ["Source :", "Dest :", "Options :", "Started :", "Monitor :", "Origine =", "Destinazione :"]):
-                tokens = stripped.split()
-                file_size = None
-                for t in tokens:
-                    if t.isdigit():
-                        file_size = int(t)
-                        break
-                if file_size is not None:
-                    bytes_fatti_task += file_size
-                    current_file_size = 0
-                    current_file_fraction = 0.0
-                    
-                    now_time = time.time()
-                    if now_time - last_update_time >= REFRESH_RATE:
-                        global_done = current_bytes_global + bytes_fatti_task
-                        print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
-                                            global_done, total_bytes_global, task_start_time)
-                        last_update_time = now_time
-                
+            # Check riga di file da copiare (New File, Newer, etc.)
             elif any(tag in stripped for tag in ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]):
+                # Finalizza il file precedente se ce n'era uno in corso
+                if current_file_size > 0:
+                    bytes_fatti_task += current_file_size
+
+                # Imposta il nuovo file da tracciare
+                current_file_size = 0
+                current_file_fraction = 0.0
                 tokens = stripped.split()
                 for t in tokens:
                     if t.isdigit():
                         current_file_size = int(t)
-                        current_file_fraction = 0.0
                         break
+
+                now_time = time.time()
+                if now_time - last_update_time >= REFRESH_RATE:
+                    global_done = current_bytes_global + bytes_fatti_task
+                    print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
+                                        global_done, total_bytes_global, task_start_time, start_time_global)
+                    last_update_time = now_time
+
+        # Finalizza l'ultimo file se ce n'era uno in corso
+        if current_file_size > 0:
+            bytes_fatti_task += current_file_size
+            current_file_size = 0
 
         process.wait()
 
         # Parsing statistiche finali
-        for l in summary_lines:
-            l_low = l.lower()
-            if ":" not in l: continue
-            nums = [int(x) for x in l.replace(":", " ").split() if x.isdigit()]
+        for line in summary_lines:
+            line_low = line.lower()
+            if ":" not in line: continue
+            nums = [int(x) for x in line.replace(":", " ").split() if x.isdigit()]
             if len(nums) < 6: continue
             
-            if "dir" in l_low or "cartell" in l_low:
+            if "dir" in line_low or "cartell" in line_low:
                 final_stats["dirs_total"] = nums[0]; final_stats["dirs_copied"] = nums[1]
                 final_stats["dirs_skipped"] = nums[2]; final_stats["dirs_failed"] = nums[4]
-            elif "file" in l_low:
+            elif "file" in line_low:
                 final_stats["files_total"] = nums[0]; final_stats["files_copied"] = nums[1]
                 final_stats["files_skipped"] = nums[2]; final_stats["files_failed"] = nums[4]
-            elif "byte" in l_low:
+            elif "byte" in line_low:
                 final_stats["bytes_total"] = nums[0]; final_stats["bytes_copied"] = nums[1]
                 final_stats["bytes_skipped"] = nums[2]; final_stats["bytes_failed"] = nums[4]
 
         # Stampa progresso finale del task
         global_done = current_bytes_global + bytes_fatti_task
         print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
-                            global_done, total_bytes_global, task_start_time)
+                            global_done, total_bytes_global, task_start_time, start_time_global)
 
         return final_stats, bytes_fatti_task, errori_task
 
@@ -569,13 +585,27 @@ def esegui_backup(preset_index: int | None = None, simulazione: bool = False) ->
     print("\nAnalisi modifiche in corso...")
     task_bytes_plan = {}  # {nome_cartella: bytes_da_trasferire}
     total_bytes_global = 0
-    for coppia in cartelle_valide:
+    num_cartelle = len(cartelle_valide)
+    analysis_start = time.time()
+    for idx, coppia in enumerate(cartelle_valide):
         src = fix_long_path(coppia["origine"])
         dst = fix_long_path(os.path.join(root_dest, coppia["nome_cartella"]))
-        files_cnt, bytes_cnt = get_robocopy_plan(src, dst, user_exclusions=preset.get("esclusioni", []))
+        nome = smart_truncate(coppia["nome_cartella"], 25)
+        pct = (idx / num_cartelle) * 100
+        elapsed_a = time.time() - analysis_start
+        if idx > 0 and elapsed_a > 0:
+            eta_a = _format_eta((elapsed_a / idx) * (num_cartelle - idx))
+        else:
+            eta_a = _format_eta(0)
+        progress_prefix = f"Analisi {idx+1}/{num_cartelle} {pct:.0f}% ~{eta_a} | {nome}"
+        print(f"\r {progress_prefix}".ljust(79)[:79], end="\r", flush=True)
+        files_cnt, bytes_cnt = get_robocopy_plan(
+            src, dst, user_exclusions=preset.get("esclusioni", []),
+            progress_prefix=progress_prefix
+        )
         task_bytes_plan[coppia["nome_cartella"]] = bytes_cnt
         total_bytes_global += bytes_cnt
-    print(f"Da trasferire: {format_size(total_bytes_global)} in {len(cartelle_valide)} cartelle")
+    print(f"\rDa trasferire: {format_size(total_bytes_global)} in {num_cartelle} cartelle".ljust(79)[:79])
 
     # --- ESECUZIONE ---
     print(f"\n--- Esecuzione {tipo_run} ---")
@@ -657,7 +687,8 @@ def esegui_backup(preset_index: int | None = None, simulazione: bool = False) ->
     if "storico_stats" not in preset: preset["storico_stats"] = {}
     
     total_time = time.time() - start_total
-    avg_speed = report_bytes_copied / total_time if total_time > 0 else 0
+    transfer_time = time.time() - start_time_global
+    avg_speed = report_bytes_copied / transfer_time if transfer_time > 0 else 0
 
     # Recupero dati precedenti
     prev_data = preset["storico_stats"].get(current_machine, {})
@@ -698,8 +729,8 @@ def esegui_backup(preset_index: int | None = None, simulazione: bool = False) ->
     
     # Velocità Media Reale
     speed_str = "0.00 B/s"
-    if total_time > 0 and report_bytes_copied > 0:
-        speed_val = report_bytes_copied / total_time
+    if transfer_time > 0 and report_bytes_copied > 0:
+        speed_val = report_bytes_copied / transfer_time
         speed_str = f"{format_size(speed_val)}/s"
 
     print("-" * 60)
