@@ -143,7 +143,7 @@
             "titolo": "PC-Ufficio",
             "machine_id": "PC-Battaglia | GBattaglia",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2026-06-18",
+            "ultimo_backup": "2026-06-25",
             "root_destinazione": "P:/BackUp",
             "coppie_cartelle": [
                 {
@@ -166,9 +166,17 @@
             "esclusioni": [],
             "storico_stats": {
                 "PC-Battaglia | GBattaglia": {
-                    "last_run_date": "2026-06-18",
-                    "total_files": 4265,
-                    "total_bytes": 1651899945
+                    "last_run_date": "2026-06-25",
+                    "total_files": 17491,
+                    "total_bytes": 4109052203,
+                    "total_dirs": 4688,
+                    "files_copied": 7436,
+                    "bytes_copied": 1684202384,
+                    "files_skipped": 10055,
+                    "files_failed": 0,
+                    "duration_seconds": 930.24,
+                    "avg_speed": 1810508.62,
+                    "num_sources": 4
                 }
             }
         }
