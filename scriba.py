@@ -19,7 +19,7 @@ from tkinter import filedialog
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.8.0 di giugno 2026"
+APP_VERSION = "2.8.1 di giugno 2026"
 SETTINGS_FILE = "scriba_settings.json"
 # ... (rest of constants remains same)
 REFRESH_RATE = 1.0
@@ -265,7 +265,7 @@ def print_progress_line(task_name: str, task_bytes_done: int, task_bytes_total: 
         global_part = f"Tot: {format_size(global_bytes_done)}"
 
     progress_text = f"\r {task_part} | {global_part}"
-    print(progress_text.ljust(79)[:79], end="", flush=True)
+    print(progress_text.ljust(79)[:79], end="\r", flush=True)
 
 def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = None) -> tuple[int, int]:
     """
