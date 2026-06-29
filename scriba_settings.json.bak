@@ -81,6 +81,10 @@
                 {
                     "origine": "C:/Users/Utente/.antigravity",
                     "nome_cartella": ".antigravity"
+                },
+                {
+                    "origine": "C:/Users/Utente/Documents",
+                    "nome_cartella": "Documents"
                 }
             ],
             "machine_id": "GabryBat | Utente",
@@ -161,10 +165,6 @@
                 {
                     "origine": "E:/git",
                     "nome_cartella": "git"
-                },
-                {
-                    "origine": "C:/Users/GBattaglia",
-                    "nome_cartella": "GBattaglia"
                 }
             ],
             "esclusioni": [],
