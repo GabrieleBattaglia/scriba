@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-06-30",
+            "ultimo_backup": "2026-07-17",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -75,57 +75,33 @@
                     "nome_cartella": "REAPER"
                 },
                 {
-                    "origine": "E:\\git\\Mine",
-                    "nome_cartella": "Mine"
-                },
-                {
                     "origine": "C:/Users/Utente/.antigravity",
                     "nome_cartella": ".antigravity"
                 },
                 {
                     "origine": "C:/Users/Utente/Documents",
                     "nome_cartella": "Documents"
+                },
+                {
+                    "origine": "E:/git",
+                    "nome_cartella": "git"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-06-30",
-                    "total_files": 89896,
-                    "total_bytes": 500062679406,
-                    "total_dirs": 12264,
-                    "files_copied": 303,
-                    "bytes_copied": 1933223101,
-                    "files_skipped": 89593,
+                    "last_run_date": "2026-07-17",
+                    "total_files": 82982,
+                    "total_bytes": 495465909302,
+                    "total_dirs": 9967,
+                    "files_copied": 31,
+                    "bytes_copied": 1136432441,
+                    "files_skipped": 82951,
                     "files_failed": 0,
-                    "duration_seconds": 96.09,
-                    "avg_speed": 27942307.92,
+                    "duration_seconds": 805.06,
+                    "avg_speed": 1448563.66,
                     "num_sources": 20
-                }
-            }
-        },
-        {
-            "titolo": "Il mio piccino",
-            "machine_id": "GabryMiniPC-GPD | Gabriele",
-            "giorni_periodicita": 30,
-            "ultimo_backup": "2026-01-25",
-            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
-            "coppie_cartelle": [
-                {
-                    "origine": "E:\\",
-                    "nome_cartella": "E"
-                }
-            ],
-            "esclusioni": [
-                "E:\\ReaperPeaks",
-                "E:\\Music"
-            ],
-            "storico_stats": {
-                "GabryMiniPC-GPD | Gabriele": {
-                    "last_run_date": "2026-01-25",
-                    "total_files": 79772,
-                    "total_bytes": 14905641508
                 }
             }
         },
@@ -147,7 +123,7 @@
             "titolo": "PC-Ufficio",
             "machine_id": "PC-Battaglia | GBattaglia",
             "giorni_periodicita": 30,
-            "ultimo_backup": "2026-06-25",
+            "ultimo_backup": "2026-07-09",
             "root_destinazione": "P:/BackUp",
             "coppie_cartelle": [
                 {
@@ -170,16 +146,16 @@
             "esclusioni": [],
             "storico_stats": {
                 "PC-Battaglia | GBattaglia": {
-                    "last_run_date": "2026-06-25",
-                    "total_files": 17491,
-                    "total_bytes": 4109052203,
-                    "total_dirs": 4688,
-                    "files_copied": 7436,
-                    "bytes_copied": 1684202384,
-                    "files_skipped": 10055,
+                    "last_run_date": "2026-07-09",
+                    "total_files": 17507,
+                    "total_bytes": 3268904978,
+                    "total_dirs": 4626,
+                    "files_copied": 952,
+                    "bytes_copied": 506696699,
+                    "files_skipped": 16555,
                     "files_failed": 0,
-                    "duration_seconds": 930.24,
-                    "avg_speed": 1810508.62,
+                    "duration_seconds": 478.7,
+                    "avg_speed": 1784107.69,
                     "num_sources": 4
                 }
             }

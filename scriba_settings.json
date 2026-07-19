@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-06-30",
+            "ultimo_backup": "2026-07-19",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -75,57 +75,33 @@
                     "nome_cartella": "REAPER"
                 },
                 {
-                    "origine": "E:\\git\\Mine",
-                    "nome_cartella": "Mine"
-                },
-                {
                     "origine": "C:/Users/Utente/.antigravity",
                     "nome_cartella": ".antigravity"
                 },
                 {
                     "origine": "C:/Users/Utente/Documents",
                     "nome_cartella": "Documents"
+                },
+                {
+                    "origine": "E:/git",
+                    "nome_cartella": "git"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-06-30",
-                    "total_files": 89896,
-                    "total_bytes": 500062679406,
-                    "total_dirs": 12264,
-                    "files_copied": 303,
-                    "bytes_copied": 1933223101,
-                    "files_skipped": 89593,
+                    "last_run_date": "2026-07-19",
+                    "total_files": 82689,
+                    "total_bytes": 495475232198,
+                    "total_dirs": 9838,
+                    "files_copied": 591,
+                    "bytes_copied": 1283419924,
+                    "files_skipped": 82098,
                     "files_failed": 0,
-                    "duration_seconds": 96.09,
-                    "avg_speed": 27942307.92,
+                    "duration_seconds": 428.22,
+                    "avg_speed": 3203054.99,
                     "num_sources": 20
-                }
-            }
-        },
-        {
-            "titolo": "Il mio piccino",
-            "machine_id": "GabryMiniPC-GPD | Gabriele",
-            "giorni_periodicita": 30,
-            "ultimo_backup": "2026-01-25",
-            "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\MiniPC",
-            "coppie_cartelle": [
-                {
-                    "origine": "E:\\",
-                    "nome_cartella": "E"
-                }
-            ],
-            "esclusioni": [
-                "E:\\ReaperPeaks",
-                "E:\\Music"
-            ],
-            "storico_stats": {
-                "GabryMiniPC-GPD | Gabriele": {
-                    "last_run_date": "2026-01-25",
-                    "total_files": 79772,
-                    "total_bytes": 14905641508
                 }
             }
         },
