@@ -3,7 +3,7 @@
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-07-19",
+            "ultimo_backup": "2026-07-25",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -91,16 +91,16 @@
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-07-19",
-                    "total_files": 82689,
-                    "total_bytes": 495475232198,
-                    "total_dirs": 9838,
-                    "files_copied": 591,
-                    "bytes_copied": 1283419924,
-                    "files_skipped": 82098,
+                    "last_run_date": "2026-07-25",
+                    "total_files": 109682,
+                    "total_bytes": 499294588339,
+                    "total_dirs": 15038,
+                    "files_copied": 794,
+                    "bytes_copied": 1374713444,
+                    "files_skipped": 108888,
                     "files_failed": 0,
-                    "duration_seconds": 428.22,
-                    "avg_speed": 3203054.99,
+                    "duration_seconds": 171.27,
+                    "avg_speed": 9863111.0,
                     "num_sources": 20
                 }
             }
