@@ -1,0 +1,33 @@
+# Configurazione ruff di Scriba.
+# Autori: Gabriele Battaglia (IZ4APU) & ClaudIA (Claude Opus 5, modalita' auto).
+line-length = 110
+
+[lint]
+select = ["E", "F", "W", "B", "SIM", "UP", "I", "C4", "RET", "BLE", "S", "RUF", "DTZ"]
+ignore = [
+    # Righe lunghe: molti messaggi all'utente stanno su una riga sola e
+    # spezzarli renderebbe piu' difficile leggerli nel codice.
+    "E501",
+    # Lo stile di Gabriele ammette l'istruzione breve sulla stessa riga.
+    "E701",
+    "E702",
+    "E741",
+    # Date e orari sono di proposito ora locale, senza fuso. Scriba parla di
+    # scadenze sul calendario di chi lo usa: un backup ogni trenta giorni
+    # scade il giorno che segna il suo orologio, non quello di Greenwich, e
+    # gli orari nei nomi dei log servono a ritrovarli, non a confrontarli con
+    # altre macchine. Convertire a UTC sposterebbe le scadenze di un giorno
+    # per chi lavora la sera, che e' esattamente il caso di Gabriele.
+    "DTZ005",
+    "DTZ007",
+    "DTZ011",
+    # Robocopy e shutdown sono comandi di sistema di Windows, chiamati con la
+    # lista degli argomenti e mai con la shell: e' gia' il modo sicuro.
+    "S603",
+    "S607",
+]
+
+[lint.per-file-ignores]
+# Nei test le asserzioni sono il punto, e gli elenchi di righe di esempio
+# stanno bene come attributi di classe: non li modifica nessuno.
+"tests/*.py" = ["S101", "RUF012"]

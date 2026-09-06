@@ -1,9 +1,10 @@
 {
+    "schema": 1,
     "presets": [
         {
             "titolo": "Gigante",
             "giorni_periodicita": 21,
-            "ultimo_backup": "2026-07-25",
+            "ultimo_backup": "2026-09-06",
             "root_destinazione": "\\\\iliadbox_Server\\iliadbox\\backups\\PC_Gigante",
             "coppie_cartelle": [
                 {
@@ -75,33 +76,165 @@
                     "nome_cartella": "REAPER"
                 },
                 {
-                    "origine": "C:/Users/Utente/.antigravity",
-                    "nome_cartella": ".antigravity"
-                },
-                {
                     "origine": "C:/Users/Utente/Documents",
                     "nome_cartella": "Documents"
                 },
                 {
                     "origine": "E:/git",
                     "nome_cartella": "git"
+                },
+                {
+                    "origine": "C:/Users/Utente/Downloads",
+                    "nome_cartella": "Downloads"
+                },
+                {
+                    "origine": "C:/Users/Utente/.claude",
+                    "nome_cartella": ".claude"
                 }
             ],
             "machine_id": "GabryBat | Utente",
             "esclusioni": [],
             "storico_stats": {
                 "GabryBat | Utente": {
-                    "last_run_date": "2026-07-25",
-                    "total_files": 109682,
-                    "total_bytes": 499294588339,
-                    "total_dirs": 15038,
-                    "files_copied": 794,
-                    "bytes_copied": 1374713444,
-                    "files_skipped": 108888,
+                    "last_run_date": "2026-09-06",
+                    "total_files": 75294,
+                    "total_bytes": 497852166737,
+                    "total_dirs": 9055,
+                    "files_copied": 2348,
+                    "bytes_copied": 5129732283,
+                    "files_skipped": 72946,
                     "files_failed": 0,
-                    "duration_seconds": 171.27,
-                    "avg_speed": 9863111.0,
-                    "num_sources": 20
+                    "duration_seconds": 867.69,
+                    "avg_speed": 6081689.55,
+                    "num_sources": 21,
+                    "cartelle": {
+                        "VstPlugins": {
+                            "durata": 3.39,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Documenti": {
+                            "durata": 2.45,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Cucina": {
+                            "durata": 0.94,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "DownloadImmagazzinati": {
+                            "durata": 0.08,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Films": {
+                            "durata": 0.12,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Libri": {
+                            "durata": 0.22,
+                            "byte": 2993486,
+                            "file": 5,
+                            "data": "2026-09-06"
+                        },
+                        "Ludoteca": {
+                            "durata": 0.07,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Manuali": {
+                            "durata": 1.87,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Music": {
+                            "durata": 3.93,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Software": {
+                            "durata": 24.0,
+                            "byte": 516177487,
+                            "file": 394,
+                            "data": "2026-09-06"
+                        },
+                        "Sounds": {
+                            "durata": 2.87,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Video": {
+                            "durata": 0.12,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Audio": {
+                            "durata": 1.3,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Thunderbird": {
+                            "durata": 21.09,
+                            "byte": 1922027383,
+                            "file": 223,
+                            "data": "2026-09-06"
+                        },
+                        "nvda": {
+                            "durata": 15.78,
+                            "byte": 19726449,
+                            "file": 975,
+                            "data": "2026-09-06"
+                        },
+                        "User": {
+                            "durata": 5.05,
+                            "byte": 15861796,
+                            "file": 114,
+                            "data": "2026-09-06"
+                        },
+                        "REAPER": {
+                            "durata": 2.06,
+                            "byte": 55187389,
+                            "file": 27,
+                            "data": "2026-09-06"
+                        },
+                        "Documents": {
+                            "durata": 0.83,
+                            "byte": 6592818,
+                            "file": 19,
+                            "data": "2026-09-06"
+                        },
+                        "git": {
+                            "durata": 723.53,
+                            "byte": 0,
+                            "file": 0,
+                            "data": "2026-09-06"
+                        },
+                        "Downloads": {
+                            "durata": 27.87,
+                            "byte": 2517519893,
+                            "file": 27,
+                            "data": "2026-09-06"
+                        },
+                        ".claude": {
+                            "durata": 5.86,
+                            "byte": 73645582,
+                            "file": 564,
+                            "data": "2026-09-06"
+                        }
+                    }
                 }
             }
         },
@@ -117,7 +250,8 @@
                     "nome_cartella": "Documenti"
                 }
             ],
-            "esclusioni": []
+            "esclusioni": [],
+            "storico_stats": {}
         },
         {
             "titolo": "PC-Ufficio",
