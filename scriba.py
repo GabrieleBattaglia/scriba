@@ -1,1201 +1,2254 @@
-# Scriba by Gabriele Battaglia (IZ4APU)
+# Scriba, orchestratore di backup basato su Robocopy.
+# Autori: Gabriele Battaglia (IZ4APU) & ClaudIA (Claude Opus 5, modalità auto).
 # Data concepimento mercoledì 21 novembre 2025.
-# TODO:
-# - Valutare suddivisione in moduli (engine.py, ui.py, settings.py)
-# - Implementare rotazione log con timestamp invece di sovrascrittura
-# - Aggiungere unit test per le funzioni di utility (fix_long_path, format_size)
 
-import os
-import json
-import re
+import contextlib
 import copy
-import subprocess
 import datetime
-import time
+import json
+import os
 import platform
+import re
 import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
 import tkinter as tk
 from tkinter import filedialog
 
+from GBUtils import Acusticator, Donazione, dgt, enter_escape, gestisci_aggiornamento, manuale, menu
+
+try:
+    import msvcrt
+except ImportError:  # fuori da Windows non c'è, e lo stato a richiesta si spegne
+    msvcrt = None
+
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "2.8.3 di giugno 2026"
-SETTINGS_FILE = "scriba_settings.json"
-# ... (rest of constants remains same)
-REFRESH_RATE = 1.0
-PRESET_TEMPLATE = {
-    "titolo": "Casual",
-    "machine_id": "God's Machine",
+APP_VERSION = "3.0.0"
+RELEASE_DATE = "2026-09-06"
+VERSIONE_SCHEMA = 1
+NOME_MANUALE = "Manuale_Scriba.txt"
+API_RELEASE = "https://api.github.com/repos/GabrieleBattaglia/scriba/releases/latest"
+LARGHEZZA_BLOCCO = 40
+# Robocopy scrive il log nella codepage OEM della macchina. Su Windows
+# italiano è la 850, che prima stava scritta a mano in tre punti, ma altrove
+# è un'altra: il codec oem chiede al sistema qual è la sua.
+CODIFICA_LOG = "oem" if os.name == "nt" else "utf-8"
+# Segnali acustici dell'avanzamento: sette ottave da c2 a b8, onda
+# triangolare perché è la più morbida da tenere in sottofondo per ore.
+SCALA = ["c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b"]
+OTTAVA_MINIMA = 2
+OTTAVE = 7
+ONDA = 3
+# Attacco corto e decadimento lungo, senza sostegno: la nota nasce e si
+# spegne da sola, come una corda pizzicata o una campanella. E' quello che
+# rende il segnale discreto anche quando se ne sentono a decine.
+ADSR_SEGNALE = [3, 72, 0, 0]
+DURATA_SEGNALE = 0.075
+VOLUME_SEGNALE = 0.45
+# Cadenza dei segnali: uno ogni due punti percentuali di avanzamento
+# complessivo, e mai due a meno di cinque secondi l'uno dall'altro.
+PASSO_SEGNALE = 0.02
+SECONDI_FRA_SEGNALI = 5.0
+# La barra di avanzamento si riscrive sul posto, fra due ritorni a capo e
+# larga esattamente quanto un display braille. Il ritorno a capo finale
+# riporta il cursore a colonna zero: e' quello che tiene il focus fermo sul
+# principio della riga, cosi' le dita restano dove sono e leggono un dato che
+# si aggiorna sotto di loro. E' il motivo per cui la barra esiste.
+# Due secondi, non uno: NVDA ha bisogno di tempo per leggere quel che
+# cambia, e una riga che si riscrive troppo spesso non si riesce a seguire.
+# Questa cadenza riguarda soltanto la barra, non i segnali acustici, che
+# hanno la loro, ne' il resto di quel che il programma scrive.
+SECONDI_FRA_AGGIORNAMENTI = 2.0
+# Ogni quanto una riga di stato viene scritta nel diario. A schermo non
+# compare: la barra basta, e il diario non deve riempirsi di sue copie.
+SECONDI_FRA_RIGHE = 120.0
+# Ogni quanto il lettore del log si sveglia anche se robocopy tace, cosi' la
+# barra si aggiorna anche mentre si sta soltanto scandendo.
+SECONDI_FRA_BATTITI = 0.5
+
+
+def cartella_programma() -> str:
+    """Restituisce la cartella in cui vive Scriba.
+    Da sorgente è quella di questo file, da eseguibile PyInstaller è quella
+    dell'exe. Non è mai la directory di lavoro corrente, che dipende da dove
+    l'utente ha lanciato il programma e che quindi farebbe cercare le
+    impostazioni in un posto diverso a ogni avvio.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def file_di_supporto(nome: str) -> str:
+    """Percorso di un file che viaggia insieme al programma.
+    Da eseguibile PyInstaller i file dichiarati in datas non stanno accanto
+    all'exe ma nella cartella temporanea di estrazione, che sta in
+    sys._MEIPASS: chi cerca il manuale deve guardare lì.
+    """
+    base = getattr(sys, "_MEIPASS", None) or cartella_programma()
+    return os.path.join(base, nome)
+
+
+FILE_IMPOSTAZIONI = os.path.join(cartella_programma(), "scriba_settings.json")
+CARTELLA_DIARI = os.path.join(cartella_programma(), "diari")
+MODELLO_PRESET = {
+    "titolo": "",
+    "machine_id": "",
     "giorni_periodicita": 365,
     "ultimo_backup": None,
     "root_destinazione": "",
     "coppie_cartelle": [],
     "esclusioni": [],
-    "storico_stats": {}
+    "storico_stats": {},
 }
+
+# --- DIARIO DI SESSIONE ---
+
+
+class _Sdoppiatore:
+    """Manda quel che Scriba scrive sia a schermo sia sul diario di sessione.
+    Serve per poter rileggere una sessione intera, o consegnarla a chi analizza
+    un problema, senza doverla ricopiare a mano dal terminale.
+    """
+
+    def __init__(self, flusso, apertura):
+        self._flusso = flusso
+        self._handle = apertura
+
+    def write(self, testo: str) -> int:
+        scritti = self._flusso.write(testo)
+        with contextlib.suppress(OSError, ValueError):
+            self._handle.write(testo)
+        return scritti
+
+    def flush(self) -> None:
+        self._flusso.flush()
+        with contextlib.suppress(OSError, ValueError):
+            self._handle.flush()
+
+    def isatty(self) -> bool:
+        return getattr(self._flusso, "isatty", lambda: False)()
+
+
+_diario_handle = None
+_diario_path = None
+_stdout_originale = None
+
+
+def apri_diario() -> str | None:
+    """Apre il diario della sessione e ci dirotta una copia di tutto l'output.
+    Restituisce il percorso del file, oppure None se non è stato possibile
+    aprirlo: in quel caso Scriba lavora comunque, soltanto senza diario.
+    """
+    global _diario_handle, _diario_path, _stdout_originale
+    if _diario_handle is not None:
+        return _diario_path
+    try:
+        os.makedirs(CARTELLA_DIARI, exist_ok=True)
+        nome = datetime.datetime.now().strftime("sessione_%Y-%m-%d_%H-%M-%S.txt")
+        percorso = os.path.join(CARTELLA_DIARI, nome)
+        # Il diario resta aperto per tutta la sessione, quindi non puo'
+        # stare dentro un gestore di contesto: da qui la deroga a SIM115.
+        apertura = open(percorso, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    except OSError:
+        return None
+    _diario_handle = apertura
+    _diario_path = percorso
+    _stdout_originale = sys.stdout
+    sys.stdout = _Sdoppiatore(_stdout_originale, apertura)
+    intestazione = (
+        f"Diario di {APP_NAME} v{APP_VERSION} del {RELEASE_DATE}\n"
+        f"Avvio: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Macchina: {id_macchina()}\n"
+        f"Eseguito da: {'eseguibile' if getattr(sys, 'frozen', False) else 'sorgente'}\n"
+    )
+    try:
+        apertura.write(intestazione)
+        apertura.flush()
+    except (OSError, ValueError):
+        pass
+    return percorso
+
+
+def chiudi_diario() -> None:
+    """Chiude il diario e rimette a posto l'output normale."""
+    global _diario_handle, _stdout_originale
+    if _diario_handle is None:
+        return
+    try:
+        _diario_handle.write(f"Chiusura: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        _diario_handle.close()
+    except (OSError, ValueError):
+        pass
+    if _stdout_originale is not None:
+        sys.stdout = _stdout_originale
+    _diario_handle = None
+    _stdout_originale = None
+
+
+def annota(testo: str) -> None:
+    """Scrive nel diario qualcosa che a schermo non serve mostrare."""
+    if _diario_handle is None:
+        return
+    try:
+        _diario_handle.write(testo if testo.endswith("\n") else testo + "\n")
+        _diario_handle.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def chiedi(prompt: str = "") -> str:
+    """Legge una risposta dalla tastiera e la annota nel diario.
+    L'eco di quel che si digita lo fa il terminale, non Python, quindi senza
+    questo passaggio il diario conserverebbe le domande e non le risposte.
+    """
+    risposta = input(prompt)
+    annota(f"[risposta] {risposta}")
+    return risposta
+
+
+def conferma(domanda: str, guida: str = "Invio per confermare, Escape per annullare") -> bool:
+    """Chiede una conferma con invio o escape, e la annota nel diario.
+    Le domande che portano via dati non passano di qui: quelle chiedono di
+    scrivere SI per esteso, perché un tasto solo è troppo poco.
+    """
+    esito = bool(enter_escape(domanda, guida))
+    annota(f"[risposta] {domanda} -> {'si' if esito else 'no'}")
+    return esito
+
+
+def chiedi_numero(prompt: str, minimo: int, massimo: int, predefinito: int) -> int:
+    """Chiede un numero intero con dgt, e lo annota nel diario."""
+    valore = dgt(prompt, kind="i", imin=minimo, imax=massimo, default=predefinito)
+    annota(f"[risposta] {valore}")
+    return valore
+
+
+def pausa(messaggio: str = "Premi invio per tornare al menu") -> None:
+    """Aspetta un invio, e lo annota nel diario."""
+    enter_escape(messaggio, guida="Premi invio, oppure escape")
+    annota(f"[pausa] {messaggio}")
+
+
+def _chiave_di_menu(etichetta: str, gia_usate) -> str:
+    """Ricava dalla etichetta una chiave di menu che non sia gia' presa."""
+    base = " ".join(str(etichetta).split()) or "voce"
+    chiave = base
+    prese = {k.lower() for k in gia_usate}
+    progressivo = 2
+    while chiave.lower() in prese:
+        chiave = f"{base} {progressivo}"
+        progressivo += 1
+    return chiave
+
+
+def scegli_voce(voci: list[tuple[str, str]], prompt: str = "Scegli") -> int | None:
+    """Fa scegliere una voce da un elenco, con il menu a parole di GBUtils.
+    Ogni voce e' una coppia, cioe' il nome da scrivere e la descrizione da
+    leggere. Restituisce la posizione della voce scelta, oppure None se si
+    annulla con il punto, con invio a vuoto o con escape.
+    Si scrive il nome, o le prime lettere che bastano a distinguerlo: i
+    numeri da contare nell'elenco non servono piu' a nessuno, e sbagliarne
+    uno significava lavorare sul preset sbagliato.
+    """
+    if not voci:
+        return None
+    elenco = {}
+    posizioni = {}
+    for posizione, (etichetta, descrizione) in enumerate(voci):
+        chiave = _chiave_di_menu(etichetta, elenco)
+        elenco[chiave] = descrizione
+        posizioni[chiave] = posizione
+    elenco["."] = "Annulla"
+    scelta = menu(elenco, show=True, keyslist=True, ordered=False, p=f"{prompt}: ")
+    annota(f"[scelta] {prompt}: {scelta}")
+    if scelta is None or scelta == ".":
+        return None
+    return posizioni.get(scelta)
+
 
 # --- GESTIONE DATI E SICUREZZA ---
 
-def get_machine_id() -> str:
-    hostname = platform.node()
-    try:
-        username = os.getlogin()
-    except Exception:
-        username = os.environ.get('USERNAME', 'Unknown')
-    return f"{hostname} | {username}"
 
-def load_settings() -> dict | None:
-    if not os.path.exists(SETTINGS_FILE):
-        return {"presets": []}
+def id_macchina() -> str:
+    """Nome della macchina e dell'utente, come li vede il sistema."""
+    nome_macchina = platform.node()
     try:
-        with open(SETTINGS_FILE, encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"ERRORE CRITICO caricamento settings: {e}")
-        return None 
+        nome_utente = os.getlogin()
+    except OSError:
+        nome_utente = os.environ.get("USERNAME", "sconosciuto")
+    return f"{nome_macchina} | {nome_utente}"
 
-def save_settings(data: dict | None) -> None:
-    if data is None: return
-    if os.path.exists(SETTINGS_FILE):
+
+def nome_destinazione(percorso: str, nomi_usati: list[str] | None = None) -> str:
+    """Ricava il nome della cartella di destinazione da un percorso di origine.
+    Il nome deve essere unico dentro il preset: con /MIR due origini che
+    finiscono nella stessa cartella si cancellano i dati a vicenda, perché la
+    seconda considera estraneo tutto quel che ha copiato la prima. Se il nome
+    è già preso si antepone quello della cartella superiore, e se non basta
+    si aggiunge un numero.
+    """
+    pulito = percorso.replace("/", "\\").rstrip("\\")
+    base = os.path.basename(pulito)
+    if not base:
+        base = pulito.replace(":", "").replace("\\", "") or "Radice"
+    presi = [n.lower() for n in (nomi_usati or [])]
+    if base.lower() not in presi:
+        return base
+    genitore = os.path.basename(os.path.dirname(pulito))
+    if genitore:
+        candidato = f"{genitore}-{base}"
+        if candidato.lower() not in presi:
+            return candidato
+    progressivo = 2
+    while f"{base}-{progressivo}".lower() in presi:
+        progressivo += 1
+    return f"{base}-{progressivo}"
+
+
+def nomi_duplicati(preset: dict) -> list[str]:
+    """Restituisce i nomi di destinazione usati da più di una origine.
+    Il confronto ignora maiuscole e minuscole, perché per Windows sono lo
+    stesso nome, ma il nome restituito è quello scritto nel preset, che è
+    quello che l'utente si aspetta di leggere.
+    """
+    quante = {}
+    scrittura = {}
+    for coppia in preset.get("coppie_cartelle", []):
+        nome = str(coppia.get("nome_cartella", ""))
+        chiave = nome.lower()
+        quante[chiave] = quante.get(chiave, 0) + 1
+        scrittura.setdefault(chiave, nome)
+    return sorted(scrittura[c] for c, volte in quante.items() if volte > 1 and c)
+
+
+def _intero_valido(valore, minimo: int, riserva: int) -> int:
+    """Converte un valore in intero, tornando alla riserva se non si può."""
+    try:
+        numero = int(valore)
+    except (TypeError, ValueError):
+        return riserva
+    return numero if numero >= minimo else riserva
+
+
+def valida_preset(preset: dict, posizione: int) -> tuple[dict, list[str]]:
+    """Completa un preset con i campi mancanti e ne corregge i tipi.
+    Non scarta mai niente di recuperabile: un preset con vent'anni di storia
+    dentro vale più della pulizia formale. Restituisce il preset sistemato e
+    l'elenco degli avvisi da mostrare a chi lo sta caricando.
+    """
+    avvisi = []
+    sistemato = copy.deepcopy(preset)
+    for chiave, valore in MODELLO_PRESET.items():
+        if chiave not in sistemato:
+            sistemato[chiave] = copy.deepcopy(valore)
+    titolo = str(sistemato.get("titolo") or "").strip()
+    if not titolo:
+        titolo = f"Preset senza titolo {posizione}"
+        avvisi.append(f"Preset {posizione}: manca il titolo, chiamato {titolo}.")
+    sistemato["titolo"] = titolo
+    machine = str(sistemato.get("machine_id") or "").strip()
+    if not machine:
+        machine = "Sconosciuto"
+        avvisi.append(f"{titolo}: manca l'ID macchina.")
+    sistemato["machine_id"] = machine
+    giorni = _intero_valido(sistemato.get("giorni_periodicita"), 1, 365)
+    if giorni != sistemato.get("giorni_periodicita"):
+        avvisi.append(f"{titolo}: periodicità non valida, portata a {giorni} giorni.")
+    sistemato["giorni_periodicita"] = giorni
+    ultimo = sistemato.get("ultimo_backup")
+    if ultimo is not None:
         try:
-            shutil.copy2(SETTINGS_FILE, SETTINGS_FILE + ".bak")
-        except Exception: pass
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"ERRORE SALVATAGGIO: {e}")
+            datetime.datetime.strptime(str(ultimo), "%Y-%m-%d")
+        except ValueError:
+            avvisi.append(f"{titolo}: data dell'ultimo backup illeggibile, azzerata.")
+            ultimo = None
+    sistemato["ultimo_backup"] = ultimo
+    sistemato["root_destinazione"] = str(sistemato.get("root_destinazione") or "")
+    coppie = []
+    for coppia in sistemato.get("coppie_cartelle") or []:
+        if not isinstance(coppia, dict):
+            avvisi.append(f"{titolo}: scartata una voce di cartella illeggibile.")
+            continue
+        origine = str(coppia.get("origine") or "").strip()
+        if not origine:
+            avvisi.append(f"{titolo}: scartata una cartella senza origine.")
+            continue
+        nome = str(coppia.get("nome_cartella") or "").strip()
+        if not nome:
+            nome = nome_destinazione(origine, [c["nome_cartella"] for c in coppie])
+            avvisi.append(f"{titolo}: cartella senza nome di destinazione, chiamata {nome}.")
+        coppie.append({"origine": origine, "nome_cartella": nome})
+    sistemato["coppie_cartelle"] = coppie
+    sistemato["esclusioni"] = [str(e) for e in (sistemato.get("esclusioni") or []) if str(e).strip()]
+    storico = sistemato.get("storico_stats")
+    sistemato["storico_stats"] = storico if isinstance(storico, dict) else {}
+    doppioni = nomi_duplicati(sistemato)
+    if doppioni:
+        avvisi.append(f"{titolo}: nomi di destinazione ripetuti, {', '.join(doppioni)}.")
+        avvisi.append("Con /MIR la seconda copia cancella la prima, correggerli prima di eseguire.")
+    return sistemato, avvisi
 
-def fix_long_path(path: str) -> str:
-    if os.name == 'nt' and len(path) > 0 and not path.startswith('\\\\?\\'):
-        path = os.path.abspath(path)
-        if path.startswith('\\\\'):
-            return '\\\\?\\UNC\\' + path[2:] 
-        return '\\\\?\\' + path 
-    return path
+
+def valida_impostazioni(dati) -> tuple[dict, list[str]]:
+    """Porta le impostazioni allo schema corrente e ne ripara i difetti.
+    Il file può arrivare da una versione precedente, da un'altra macchina o
+    da una modifica a mano: prima si controlla, poi lo si usa, altrimenti il
+    primo campo mancante ferma il programma con un errore incomprensibile.
+    """
+    avvisi = []
+    if not isinstance(dati, dict):
+        return {"schema": VERSIONE_SCHEMA, "presets": []}, ["Impostazioni illeggibili, riparto da vuoto."]
+    elenco = dati.get("presets")
+    if not isinstance(elenco, list):
+        if elenco is not None:
+            avvisi.append("L'elenco dei preset era illeggibile, sostituito con uno vuoto.")
+        elenco = []
+    presets = []
+    for posizione, preset in enumerate(elenco, start=1):
+        if not isinstance(preset, dict):
+            avvisi.append(f"Preset {posizione}: voce illeggibile, saltata.")
+            continue
+        sistemato, suoi_avvisi = valida_preset(preset, posizione)
+        presets.append(sistemato)
+        avvisi.extend(suoi_avvisi)
+    schema = _intero_valido(dati.get("schema"), 0, 0)
+    if schema > VERSIONE_SCHEMA:
+        avvisi.append(f"Le impostazioni vengono da una versione più recente, schema {schema}.")
+    return {"schema": VERSIONE_SCHEMA, "presets": presets}, avvisi
+
+
+def carica_impostazioni() -> dict | None:
+    """Carica le impostazioni, le valida e le porta allo schema corrente."""
+    if not os.path.exists(FILE_IMPOSTAZIONI):
+        return {"schema": VERSIONE_SCHEMA, "presets": []}
+    try:
+        with open(FILE_IMPOSTAZIONI, encoding="utf-8") as f:
+            grezzo = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print("Impossibile leggere le impostazioni.")
+        print(f"Motivo: {e}")
+        print(f"File: {FILE_IMPOSTAZIONI}")
+        if os.path.exists(FILE_IMPOSTAZIONI + ".bak"):
+            print("Accanto al file c'è una copia .bak")
+            print("della versione precedente.")
+        return None
+    dati, avvisi = valida_impostazioni(grezzo)
+    for avviso in avvisi:
+        print(avviso)
+    return dati
+
+
+def salva_impostazioni(data: dict | None) -> bool:
+    """Salva le impostazioni senza mai lasciare il file a metà.
+    Scrive prima un file temporaneo, lo rilegge per verificare che sia JSON
+    valido e solo allora sostituisce l'originale, dopo averne messo da parte
+    la copia .bak. Il metodo precedente copiava l'originale nel .bak prima di
+    scrivere, quindi un salvataggio andato male e uno successivo bastavano a
+    portarsi via anche l'unica copia buona.
+    """
+    if data is None:
+        return False
+    data["schema"] = VERSIONE_SCHEMA
+    temporaneo = FILE_IMPOSTAZIONI + ".tmp"
+    try:
+        with open(temporaneo, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        with open(temporaneo, encoding="utf-8") as f:
+            json.load(f)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"Salvataggio non riuscito: {e}")
+        with contextlib.suppress(OSError):
+            os.remove(temporaneo)
+        return False
+    try:
+        if os.path.exists(FILE_IMPOSTAZIONI):
+            shutil.copy2(FILE_IMPOSTAZIONI, FILE_IMPOSTAZIONI + ".bak")
+        os.replace(temporaneo, FILE_IMPOSTAZIONI)
+    except OSError as e:
+        print(f"Salvataggio non riuscito: {e}")
+        return False
+    return True
+
+
+def percorso_lungo(percorso_scelto: str) -> str:
+    if os.name == "nt" and len(percorso_scelto) > 0 and not percorso_scelto.startswith("\\\\?\\"):
+        percorso_scelto = os.path.abspath(percorso_scelto)
+        if percorso_scelto.startswith("\\\\"):
+            return "\\\\?\\UNC\\" + percorso_scelto[2:]
+        return "\\\\?\\" + percorso_scelto
+    return percorso_scelto
+
 
 # --- INTERFACCIA UTENTE E UTILITIES ---
 
-def get_folder_dialog(message: str = "Seleziona una cartella") -> str | None:
+
+def scegli_cartella(message: str = "Seleziona una cartella") -> str | None:
     root = tk.Tk()
     root.withdraw()
     root.attributes("-topmost", True)
-    folder_path = filedialog.askdirectory(title=message)
+    cartella_scelta = filedialog.askdirectory(title=message)
     root.destroy()
-    return folder_path if folder_path else None
+    return cartella_scelta if cartella_scelta else None
 
-def smart_truncate(text: str, max_len: int = 45) -> str:
+
+def accorcia(text: str, max_len: int = 45) -> str:
     if len(text) <= max_len:
         return text
-    part_len = (max_len - 3) // 2
-    head = text[:part_len]
-    tail = text[-part_len:]
-    return f"{head}...{tail}"
+    meta_lunghezza = (max_len - 3) // 2
+    testa = text[:meta_lunghezza]
+    coda = text[-meta_lunghezza:]
+    return f"{testa}...{coda}"
 
-def format_size(bytes_val: float) -> str:
+
+def formatta_dimensione(byte: float) -> str:
     sign = ""
-    if bytes_val < 0:
+    if byte < 0:
         sign = "-"
-        bytes_val = abs(bytes_val)
-    if bytes_val == 0: return "0.00 B"
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if bytes_val < 1024.0:
-            return f"{sign}{bytes_val:.2f} {unit}"
-        bytes_val /= 1024.0
-    return f"{sign}{bytes_val:.2f} PB"
+        byte = abs(byte)
+    if byte == 0:
+        return "0.00 B"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if byte < 1024.0:
+            return f"{sign}{byte:.2f} {unit}"
+        byte /= 1024.0
+    return f"{sign}{byte:.2f} PB"
+
 
 def stampa_dettaglio_esteso(preset: dict) -> None:
-    print("\n" + "="*60)
-    print(f"RIEPILOGO PRESET: {preset['titolo']}")
-    print("="*60)
-    print(f"ID Macchina:       {preset.get('machine_id', 'N/A')}")
-    print(f"Periodicità:       {preset['giorni_periodicita']} giorni")
-    print(f"Ultima Esecuzione: {preset['ultimo_backup'] or 'Mai'}")
-    print(f"Root Destinazione: {preset['root_destinazione']}")
-    print("-" * 60)
-    num_cartelle = len(preset['coppie_cartelle'])
-    print(f"Cartelle da elaborare ({num_cartelle}):")
-    if num_cartelle > 15:
-        # Mostriamo solo le prime 5 e le ultime 5
-        for c in preset['coppie_cartelle'][:5]:
-            print(f"  [SRC] {c['origine']}")
-        print(f"  ... [saltate {num_cartelle - 10} cartelle nel mezzo per brevità] ...")
-        for c in preset['coppie_cartelle'][-5:]:
-            print(f"  [SRC] {c['origine']}")
-    else:
-        for c in preset['coppie_cartelle']:
-            print(f"  [SRC] {c['origine']}")
-            print(f"  [DST] ...\\{c['nome_cartella']}")
-    print("="*60 + "\n")
+    """Mostra il preset prima di eseguirlo, una riga per informazione."""
+    print()
+    print(f"Preset {preset['titolo']}")
+    print(f"Macchina {preset['machine_id'] or 'sconosciuta'}")
+    print(f"Periodicità ogni {preset['giorni_periodicita']} giorni")
+    print(f"Ultima esecuzione {preset['ultimo_backup'] or 'mai'}")
+    print(f"Destinazione {preset['root_destinazione']}")
+    quante = len(preset["coppie_cartelle"])
+    print(f"Cartelle da elaborare {quante}")
+    da_mostrare = preset["coppie_cartelle"]
+    if quante > 15:
+        da_mostrare = preset["coppie_cartelle"][:5] + preset["coppie_cartelle"][-5:]
+    for posto, c in enumerate(da_mostrare, start=1):
+        if quante > 15 and posto == 6:
+            print(f"altre {quante - 10} cartelle non elencate")
+        print(f"{c['origine']} va in {c['nome_cartella']}")
 
-def cleanup_old_logs(log_dir: str, max_age_days: int = 30) -> None:
+
+def pulisci_log_vecchi(cartella_log: str, giorni_massimi: int = 30) -> None:
+    """Toglie dalla cartella i file di testo più vecchi di tanti giorni.
+    Serve sia per i log di robocopy nella destinazione sia per i diari di
+    sessione. I guai finiscono nel diario e non a schermo: è pulizia di
+    contorno, non deve rubare l'attenzione a un backup in corso.
     """
-    Rimuove i file di log più vecchi di max_age_days dalla cartella dei log.
-    """
-    if not os.path.exists(log_dir):
+    if not os.path.exists(cartella_log):
         return
-    now = time.time()
-    limit = now - (max_age_days * 86400)
+    limite = time.time() - (giorni_massimi * 86400)
     try:
-        for filename in os.listdir(log_dir):
-            if filename.endswith(".txt"):
-                filepath = os.path.join(log_dir, filename)
-                if os.path.isfile(filepath):
-                    file_mtime = os.path.getmtime(filepath)
-                    if file_mtime < limit:
-                        try:
-                            os.remove(filepath)
-                        except Exception:
-                            pass
-    except Exception:
-        pass
+        elenco = os.listdir(cartella_log)
+    except OSError as e:
+        annota(f"[pulizia] cartella {cartella_log} non leggibile: {e}")
+        return
+    for nome in elenco:
+        if not nome.endswith(".txt"):
+            continue
+        percorso = os.path.join(cartella_log, nome)
+        try:
+            if os.path.isfile(percorso) and os.path.getmtime(percorso) < limite:
+                os.remove(percorso)
+        except OSError as e:
+            annota(f"[pulizia] {percorso} non rimosso: {e}")
 
-def play_completion_sound(success: bool = True) -> None:
-    """
-    Riproduce un segnale acustico: un tono lungo per successo,
-    tre toni brevi e consecutivi per segnalare errori.
+
+def _suona(score: list, kind: int = ONDA, adsr: list | None = None) -> None:
+    """Manda uno score ad Acusticator senza che un guaio audio fermi il backup.
+    La cattura è larga di proposito: qualunque cosa succeda alla scheda audio,
+    a un dispositivo staccato o a un driver capriccioso, la copia dei dati
+    deve proseguire. Il guaio finisce nel diario, non a schermo.
     """
     try:
-        import winsound
-        if success:
-            winsound.Beep(1000, 500)
-        else:
-            for _ in range(3):
-                winsound.Beep(500, 150)
-                time.sleep(0.1)
-    except Exception:
-        print("\a", end="", flush=True)
+        Acusticator(score, kind=kind, adsr=adsr, sync=False)
+    except Exception as e:  # noqa: BLE001
+        annota(f"[audio] segnale non riprodotto: {e}")
 
-# --- LOGICA DI UTILITY PER I COMANDI E PARSING ROBOCOPY ---
 
-def build_robocopy_cmd(src: str, dst: str, user_exclusions: list[str] | None = None, is_simulation: bool = False, is_plan: bool = False) -> list[str]:
+def scalda_audio() -> None:
+    """Apre lo stream audio prima che serva davvero.
+    Misurato: la prima chiamata ad Acusticator costa circa 840 millisecondi,
+    perché carica il motore e apre la scheda; tutte le successive stanno
+    sotto i 5. Pagare quel conto durante la copia farebbe inciampare la
+    lettura del log, quindi lo si paga all'avvio, in un thread a parte, con
+    una pausa muta.
     """
-    Costruisce il comando Robocopy in modo standardizzato, unificando le esclusioni
-    ed evitando bug di posizionamento dei parametri.
-    """
-    cmd_src = src.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
-    if cmd_src.endswith("\\") and not cmd_src.endswith(":\\"):
-        cmd_src = cmd_src.rstrip("\\")
-        
-    cmd_dst = dst.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
-    if cmd_dst.endswith("\\") and not cmd_dst.endswith(":\\"):
-        cmd_dst = cmd_dst.rstrip("\\")
 
-    if is_plan:
-        cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/L", "/BYTES", "/NJH", "/NJS", "/NDL"]
+    def lavoro():
+        _suona(["p", 0.01, 0, 0])
+
+    threading.Thread(target=lavoro, daemon=True).start()
+
+
+def nota_avanzamento(frazione: float) -> str:
+    """Traduce una frazione di avanzamento, da 0 a 1, in una nota da c2 a b8.
+    Sette ottave piene: il suono sale insieme al backup e dice a orecchio a
+    che punto siamo, senza che nessuno debba leggere niente.
+    """
+    frazione = max(0.0, min(1.0, frazione))
+    semitoni = round(frazione * (len(SCALA) * OTTAVE - 1))
+    return f"{SCALA[semitoni % len(SCALA)]}{OTTAVA_MINIMA + semitoni // len(SCALA)}"
+
+
+def suona_avanzamento(frazione: float) -> None:
+    """Segnale breve di avanzamento: nota e posizione stereo salgono insieme.
+    A zero per cento suona un do grave tutto a sinistra, a cento un si acuto
+    tutto a destra.
+    """
+    frazione = max(0.0, min(1.0, frazione))
+    pan = -1.0 + 2.0 * frazione
+    _suona([nota_avanzamento(frazione), DURATA_SEGNALE, round(pan, 3), VOLUME_SEGNALE], adsr=ADSR_SEGNALE)
+
+
+def suona_esito(riuscito: bool = True) -> None:
+    """Chiude la sessione con un accordo che sale se è andata bene e scende se no."""
+    if riuscito:
+        _suona(["c6", 0.09, -0.5, 0.5, "e6", 0.09, 0, 0.5, "g6", 0.16, 0.5, 0.5], adsr=ADSR_SEGNALE)
     else:
-        cmd = ["robocopy", cmd_src, cmd_dst, "/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/BYTES"]
-        if is_simulation:
-            cmd.append("/L")
-            
-    # Esclusioni directory di sistema / recycle
-    xd_dirs = ["$RECYCLE.BIN", "System Volume Information"]
-    
-    # Esclusioni ROOT-ONLY (Recovery)
-    drive, tail = os.path.splitdrive(src)
-    if tail in ['\\', '/', ''] or src.endswith(':\\'):
-        xd_dirs.append("Recovery")
-        
-    # Esclusioni utente
-    if user_exclusions:
-        clean_excl = [e.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "") for e in user_exclusions]
-        xd_dirs.extend(clean_excl)
-        
-    cmd.extend(["/XD"] + xd_dirs)
-    xf_files = [
-        "pagefile.sys", "hiberfil.sys", "swapfile.sys",
-        "parent.lock", "*.lock", "*.parentlock",
-        "*.gsheet", "*.gdoc", "*.gslides", "*.gdraw", "*.gtable", "*.glink", "*.gform", "*.gmap"
-    ]
-    cmd.extend(["/XF"] + xf_files)
-    
-    return cmd
+        _suona(["g3", 0.12, 0.5, 0.5, "d#3", 0.12, 0, 0.5, "c3", 0.22, -0.5, 0.5], adsr=ADSR_SEGNALE)
 
-def parse_robocopy_error(line: str) -> dict | None:
-    """
-    Esegue il parsing di una riga di robocopy contenente un errore e ne estrae i dettagli.
-    """
-    match = re.search(r"(?:ERROR|ERRORE)\s+(\d+)\s+\((0x[0-9a-fA-F]+)\)(?:\s+(.*))?", line)
-    if match:
-        err_num = match.group(1)
-        err_hex = match.group(2)
-        action_path = match.group(3) or "Dettagli non disponibili"
-        return {
-            "code_dec": int(err_num),
-            "code_hex": err_hex,
-            "detail": action_path.strip()
-        }
-    return None
 
-def _format_eta(seconds: float) -> str:
-    """Formatta un valore di secondi in una stringa ETA compatta."""
-    if seconds <= 0:
+# --- COMANDI E LETTURA DI ROBOCOPY ---
+
+# I flag che decidono quali file toccare stanno qui, in un elenco solo, ed
+# è la ragione per cui ci stanno: l'analisi girava senza /FFT e la copia con,
+# quindi le due passate non guardavano gli stessi file. Verso una condivisione
+# di rete, dove gli orari ballano di un secondo, quella differenza da sola
+# bastava a promettere molti più byte di quelli che poi venivano trasferiti.
+FLAG_SELEZIONE = ["/MIR", "/XJ", "/R:1", "/W:1", "/FFT", "/BYTES"]
+CARTELLE_ESCLUSE = ["$RECYCLE.BIN", "System Volume Information"]
+FILE_ESCLUSI = [
+    "pagefile.sys",
+    "hiberfil.sys",
+    "swapfile.sys",
+    "parent.lock",
+    "*.lock",
+    "*.parentlock",
+    "*.gsheet",
+    "*.gdoc",
+    "*.gslides",
+    "*.gdraw",
+    "*.gtable",
+    "*.glink",
+    "*.gform",
+    "*.gmap",
+]
+
+
+def _senza_prefisso_lungo(percorso: str) -> str:
+    """Toglie il prefisso dei percorsi lunghi, che robocopy non vuole."""
+    pulito = percorso.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "")
+    if pulito.endswith("\\") and not pulito.endswith(":\\"):
+        pulito = pulito.rstrip("\\")
+    return pulito
+
+
+def comando_robocopy(
+    origine_piena: str,
+    destinazione_piena: str,
+    esclusioni: list[str] | None = None,
+    simulazione: bool = False,
+    piano: bool = False,
+) -> list[str]:
+    """Costruisce il comando robocopy.
+    Fra la passata di analisi e la copia vera cambia soltanto /L, che elenca
+    senza copiare, e quanto robocopy scrive nel log. Tutto quello che
+    influenza la scelta dei file viene da FLAG_SELEZIONE, uguale per
+    entrambe, così le due passate rispondono alla stessa domanda.
+    """
+    comando = ["robocopy", _senza_prefisso_lungo(origine_piena), _senza_prefisso_lungo(destinazione_piena)]
+    comando += list(FLAG_SELEZIONE)
+    if piano:
+        comando += ["/L", "/NJH", "/NJS", "/NDL"]
+    elif simulazione:
+        comando.append("/L")
+    escluse = list(CARTELLE_ESCLUSE)
+    _, coda = os.path.splitdrive(origine_piena)
+    if coda in ["\\", "/", ""] or origine_piena.endswith(":\\"):
+        escluse.append("Recovery")
+    if esclusioni:
+        escluse.extend(_senza_prefisso_lungo(e) for e in esclusioni)
+    comando.extend(["/XD", *escluse])
+    comando.extend(["/XF", *FILE_ESCLUSI])
+    return comando
+
+
+def analizza_riga_robocopy(riga: str) -> tuple[str, int, str] | None:
+    """Riconosce una riga di file di robocopy dalla struttura, non dalla lingua.
+    Robocopy separa i campi con tabulazioni e scrive tag, dimensione e nome:
+    tre campi, con la dimensione tutta di cifre. Le righe di cartella ne
+    hanno due, perché tag e conteggio stanno insieme.
+    Restituisce il tipo, i byte e il nome, oppure None se non è una riga di
+    file. Il tipo è copia per i file da trasferire ed extra per quelli che
+    il mirror cancellerà sulla destinazione.
+    Prima il riconoscimento cercava sottostringhe in qualunque punto della
+    riga, e fra queste new e newer minuscoli: bastava un percorso che le
+    contenesse, da renewal a news.json, perché una cancellazione venisse
+    contata come byte da trasferire.
+    """
+    campi = [c.strip() for c in riga.split("\t")]
+    campi = [c for c in campi if c]
+    if len(campi) != 3:
+        return None
+    tag, dimensione, nome = campi
+    if not dimensione.isdigit() or not nome:
+        return None
+    return ("extra" if tag.startswith("*") else "copia"), int(dimensione), nome
+
+
+def analizza_sommario(righe: list[str]) -> dict[str, int]:
+    """Legge le tre righe di totali che robocopy scrive in fondo al log.
+    Sono nell'ordine cartelle, file e byte, ciascuna con sei numeri: totale,
+    copiati, ignorati, non corrispondenti, non riusciti, supplementari. Si
+    riconoscono dalla forma, cioè un'etichetta senza cifre e poi sei numeri
+    interi e nient'altro, così la lingua di Windows non conta e la riga dei
+    tempi, che ha gli orari con i due punti, non viene scambiata per loro.
+    """
+    vuoto = {
+        "dirs_total": 0,
+        "dirs_copied": 0,
+        "dirs_skipped": 0,
+        "dirs_failed": 0,
+        "files_total": 0,
+        "files_copied": 0,
+        "files_skipped": 0,
+        "files_failed": 0,
+        "bytes_total": 0,
+        "bytes_copied": 0,
+        "bytes_skipped": 0,
+        "bytes_failed": 0,
+    }
+    trovate = []
+    for riga in righe:
+        if ":" not in riga:
+            continue
+        etichetta, resto = riga.split(":", 1)
+        if any(c.isdigit() for c in etichetta):
+            continue
+        pezzi = resto.split()
+        if len(pezzi) != 6 or not all(p.isdigit() for p in pezzi):
+            continue
+        trovate.append([int(p) for p in pezzi])
+    if len(trovate) < 3:
+        return vuoto
+    cartelle, file_, byte_ = trovate[0], trovate[1], trovate[2]
+    return {
+        "dirs_total": cartelle[0],
+        "dirs_copied": cartelle[1],
+        "dirs_skipped": cartelle[2],
+        "dirs_failed": cartelle[4],
+        "files_total": file_[0],
+        "files_copied": file_[1],
+        "files_skipped": file_[2],
+        "files_failed": file_[4],
+        "bytes_total": byte_[0],
+        "bytes_copied": byte_[1],
+        "bytes_skipped": byte_[2],
+        "bytes_failed": byte_[4],
+    }
+
+
+def analizza_errore_robocopy(line: str) -> dict | None:
+    """Estrae numero, codice e dettaglio da una riga di errore di robocopy."""
+    trovato = re.search(r"(?:ERROR|ERRORE)\s+(\d+)\s+\((0x[0-9a-fA-F]+)\)(?:\s+(.*))?", line)
+    if not trovato:
+        return None
+    return {
+        "code_dec": int(trovato.group(1)),
+        "code_hex": trovato.group(2),
+        "detail": (trovato.group(3) or "Dettagli non disponibili").strip(),
+    }
+
+
+def formatta_durata(seconds: float) -> str:
+    """Formatta un numero di secondi come durata compatta."""
+    if seconds is None or seconds <= 0:
         return "--:--"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
-def print_progress_line(task_name: str, task_bytes_done: int, task_bytes_total: int,
-                        global_bytes_done: int, global_bytes_total: int,
-                        task_start_time: float, start_time_global: float) -> None:
+
+def blocchi(*pezzi) -> str:
+    """Compone una riga in blocchi di quaranta caratteri.
+    Un display braille da quaranta celle ne mostra uno per volta: se ogni
+    informazione sta dentro il suo, si legge scorrendo di un passo e non si
+    trova mai un dato spezzato a metà.
     """
-    Stampa una riga di avanzamento compatta a due sezioni:
-      Sezione 1 (operazione corrente): nome, percentuale, ETA del task
-      Sezione 2 (globale): percentuale complessiva, ETA globale
-    Adatta a screen reader, entro 80 caratteri.
+    fuori = []
+    for pezzo in pezzi:
+        testo = str(pezzo)
+        fuori.append(testo if len(testo) > LARGHEZZA_BLOCCO else testo.ljust(LARGHEZZA_BLOCCO))
+    return "".join(fuori).rstrip()
+
+
+def tasto_premuto() -> bool:
+    """Dice se qualcuno ha premuto un tasto, e svuota quel che ha digitato.
+    Serve per lo stato a richiesta durante la copia: nessuna riga che si
+    riscrive da sola, si parla soltanto quando lo si chiede.
     """
-    elapsed = time.time() - task_start_time
-    trunc_name = smart_truncate(task_name, 20)
+    if msvcrt is None:
+        return False
+    premuto = False
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+        premuto = True
+    return premuto
 
-    # --- Sezione task corrente ---
-    if task_bytes_total > 0:
-        task_pct = min(100.0, (task_bytes_done / task_bytes_total) * 100)
-        task_speed = task_bytes_done / elapsed if elapsed > 0 else 0
-        task_remaining = max(0, task_bytes_total - task_bytes_done)
-        task_eta = task_remaining / task_speed if task_speed > 0 else 0
-        task_part = f"{trunc_name} {task_pct:.0f}% ~{_format_eta(task_eta)}"
-    else:
-        task_part = f"{trunc_name} ..."
 
-    # --- Sezione globale ---
-    global_elapsed = time.time() - start_time_global if start_time_global > 0 else 0
-    if global_bytes_total > 0:
-        global_pct = min(100.0, (global_bytes_done / global_bytes_total) * 100)
-        global_speed = global_bytes_done / global_elapsed if global_elapsed > 0 else 0
-        global_remaining = max(0, global_bytes_total - global_bytes_done)
-        global_eta = global_remaining / global_speed if global_speed > 0 else 0
-        global_part = f"Tot {global_pct:.0f}% ~{_format_eta(global_eta)}"
-    else:
-        global_part = f"Tot: {format_size(global_bytes_done)}"
-
-    progress_text = f"\r {task_part} | {global_part}"
-    print(progress_text.ljust(79)[:79], end="\r", flush=True)
-
-def get_robocopy_plan(src: str, dst: str, user_exclusions: list[str] | None = None,
-                     progress_prefix: str = "", progress_interval: float = 5.0) -> tuple[int, int]:
+class Stimatore:
+    """Dice a che punto siamo e quanto manca.
+    Il tempo si stima con il tempo. In un backup periodico quasi tutto il
+    tempo se ne va a confrontare cartelle in cui non è cambiato niente, che
+    di byte ne valgono zero: una percentuale calcolata sui byte resta ferma
+    per minuti e poi salta, e la stima non converge mai. La sessione
+    precedente invece è un oracolo molto migliore, perché l'archivio cambia
+    poco e le stesse cartelle costano più o meno lo stesso tempo. Da lì si
+    parte, e si corregge in corsa con il rapporto fra il tempo speso davvero
+    e quello che ci si aspettava.
+    Alla prima esecuzione di un preset la storia non c'è ancora e si ripiega
+    sui byte previsti dall'analisi, misurando la velocità su una finestra
+    recente invece che sulla media dall'inizio, che reagisce troppo tardi.
+    Senza né storia né analisi non si inventa niente: si contano le cartelle
+    fatte e i byte copiati, e la stima si dichiara non disponibile.
     """
-    Esegue una simulazione rapida (/L) per ottenere:
-    1. Numero di operazioni previste (files da copiare).
-    2. Byte totali da trasferire (per calcolo ETA preciso).
-    Se progress_prefix è fornito, stampa un heartbeat ogni progress_interval secondi.
-    """
-    cmd = build_robocopy_cmd(src, dst, user_exclusions, is_simulation=True, is_plan=True)
-    
-    files_to_copy = 0
-    bytes_to_copy = 0
 
+    FINESTRA_VELOCITA = 30.0
+    CORREZIONE_MINIMA = 0.2
+    CORREZIONE_MASSIMA = 5.0
+
+    def __init__(self, cartelle: list[str], storico: dict | None = None, byte_previsti: dict | None = None):
+        self.cartelle = list(cartelle)
+        self.attesa = {}
+        self.byte_previsti = dict(byte_previsti or {})
+        durate = []
+        for nome in self.cartelle:
+            voce = (storico or {}).get(nome)
+            if isinstance(voce, dict) and voce.get("durata", 0) > 0:
+                durate.append(float(voce["durata"]))
+        media = sum(durate) / len(durate) if durate else 0.0
+        for nome in self.cartelle:
+            voce = (storico or {}).get(nome)
+            if isinstance(voce, dict) and voce.get("durata", 0) > 0:
+                self.attesa[nome] = float(voce["durata"])
+            else:
+                self.attesa[nome] = media
+        self.totale_atteso = sum(self.attesa.values())
+        self.totale_byte = sum(self.byte_previsti.values())
+        if durate and self.totale_atteso > 0:
+            self.modo = "tempo"
+        elif self.totale_byte > 0:
+            self.modo = "byte"
+        else:
+            self.modo = "nessuna"
+        self.fatte = []
+        self.speso = 0.0
+        self.corrente = None
+        self.byte_fatti = 0
+        self._campioni = []
+
+    def inizia(self, nome: str) -> None:
+        self.corrente = nome
+
+    def concludi(self, nome: str, durata: float, byte_copiati: int) -> None:
+        if nome not in self.fatte:
+            self.fatte.append(nome)
+        self.speso += max(0.0, durata)
+        self.byte_fatti += max(0, byte_copiati)
+        self.corrente = None
+
+    def aggiorna_byte(self, byte_nella_cartella: int) -> None:
+        """Registra i byte fatti nella cartella in corso, per la velocità."""
+        adesso = time.time()
+        self._campioni.append((adesso, self.byte_fatti + max(0, byte_nella_cartella)))
+        taglio = adesso - self.FINESTRA_VELOCITA
+        while len(self._campioni) > 2 and self._campioni[0][0] < taglio:
+            self._campioni.pop(0)
+
+    @property
+    def fattore(self) -> float:
+        """Quanto questa sessione sta andando più lenta o più svelta della scorsa."""
+        atteso = sum(self.attesa.get(n, 0.0) for n in self.fatte)
+        if self.modo != "tempo" or atteso <= 0:
+            return 1.0
+        return max(self.CORREZIONE_MINIMA, min(self.CORREZIONE_MASSIMA, self.speso / atteso))
+
+    def _velocita(self) -> float:
+        """Byte al secondo sulla finestra recente, zero se non si sa ancora."""
+        if len(self._campioni) < 2:
+            return 0.0
+        (t0, b0), (t1, b1) = self._campioni[0], self._campioni[-1]
+        return (b1 - b0) / (t1 - t0) if t1 > t0 and b1 > b0 else 0.0
+
+    def frazione(self, trascorso: float = 0.0, byte_nella_cartella: int = 0) -> float:
+        """Avanzamento complessivo da 0 a 1. Un numero c'è sempre.
+        Quando non c'è né storia né analisi, per esempio in una simulazione,
+        si contano le cartelle concluse: è meno preciso ma è vero, e
+        soprattutto è qualcosa. Prima in quel caso non si restituiva niente,
+        e siccome il suono dell'avanzamento dipende da questo numero, una
+        simulazione lunga si svolgeva in totale silenzio.
+        """
+        if self.modo == "tempo":
+            fatto = sum(self.attesa.get(n, 0.0) for n in self.fatte)
+            if self.corrente:
+                attesa_corrente = self.attesa.get(self.corrente, 0.0)
+                previsto = attesa_corrente * self.fattore
+                if previsto > 0:
+                    fatto += min(1.0, trascorso / previsto) * attesa_corrente
+            return max(0.0, min(1.0, fatto / self.totale_atteso))
+        if self.modo == "byte":
+            fatti = self.byte_fatti + max(0, byte_nella_cartella)
+            return max(0.0, min(1.0, fatti / self.totale_byte))
+        if not self.cartelle:
+            return 0.0
+        fatte = len(self.fatte) + (0.5 if self.corrente else 0.0)
+        return max(0.0, min(1.0, fatte / len(self.cartelle)))
+
+    def frazione_cartella(self, trascorso: float = 0.0, byte_nella_cartella: int = 0) -> float:
+        """Avanzamento della sola cartella in corso, da 0 a 1.
+        Serve alla barra: sapere che il totale è al dodici per cento non dice
+        se la cartella che si sta copiando adesso è appena cominciata o quasi
+        finita, e quando una cartella dura mezz'ora quella è l'informazione
+        che si aspetta.
+        """
+        if not self.corrente:
+            return 0.0
+        if self.modo == "tempo":
+            previsto = self.attesa.get(self.corrente, 0.0) * self.fattore
+            return min(1.0, trascorso / previsto) if previsto > 0 else 0.0
+        previsti = self.byte_previsti.get(self.corrente, 0)
+        if previsti > 0:
+            return max(0.0, min(1.0, byte_nella_cartella / previsti))
+        return 0.0
+
+    def eta(self, trascorso: float = 0.0, byte_nella_cartella: int = 0) -> float | None:
+        """Secondi che mancano, None se non è stimabile."""
+        if self.modo == "tempo":
+            k = self.fattore
+            residuo = 0.0
+            for nome in self.cartelle:
+                if nome in self.fatte or nome == self.corrente:
+                    continue
+                residuo += self.attesa.get(nome, 0.0) * k
+            if self.corrente:
+                residuo += max(0.0, self.attesa.get(self.corrente, 0.0) * k - trascorso)
+            return residuo
+        if self.modo == "byte":
+            velocita = self._velocita()
+            if velocita <= 0:
+                return None
+            mancano = self.totale_byte - (self.byte_fatti + max(0, byte_nella_cartella))
+            return max(0.0, mancano / velocita)
+        return None
+
+    def previsione_iniziale(self) -> str:
+        """Una frase sola da dire prima di cominciare."""
+        if self.modo == "tempo":
+            if self.totale_atteso < 60:
+                return "Previsto meno di un minuto, dalla volta scorsa."
+            return f"Previsti {formatta_durata(self.totale_atteso)}, dalla volta scorsa."
+        if self.modo == "byte":
+            return f"Da trasferire {formatta_dimensione(self.totale_byte)}."
+        return "Prima esecuzione, nessuna previsione."
+
+
+def conta_da_trasferire(
+    origine_piena: str,
+    destinazione_piena: str,
+    esclusioni: list[str] | None = None,
+    nome: str = "",
+    indice: int = 1,
+    totale: int = 1,
+) -> tuple[int, int]:
+    """Passata di sola lettura che conta quanti file e quanti byte servono.
+    Serve soltanto alla prima esecuzione di un preset su una macchina, quando
+    non c'è ancora una sessione precedente da cui stimare i tempi: dalla
+    seconda in poi la si salta, e con lei si risparmia una scansione intera
+    di origine e destinazione.
+    Restituisce file e byte da copiare, oppure None se la passata è fallita:
+    zero e zero vorrebbe dire che non c'è niente da fare, che è tutt'altra
+    cosa.
+    """
+    comando = comando_robocopy(origine_piena, destinazione_piena, esclusioni, simulazione=True, piano=True)
+    file_da_copiare = 0
+    byte_da_copiare = 0
     try:
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True, encoding='cp850', errors='replace',
-            startupinfo=startupinfo
+        avvio_nascosto = subprocess.STARTUPINFO()
+        avvio_nascosto.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        processo = subprocess.Popen(
+            comando,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            encoding=CODIFICA_LOG,
+            errors="replace",
+            startupinfo=avvio_nascosto,
         )
-        
-        copy_tags = ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]
-        last_heartbeat = time.time()
-        for line in process.stdout:
-            stripped = line.strip()
-            if stripped and any(tag in stripped for tag in copy_tags):
-                tokens = stripped.split()
-                for t in tokens:
-                    if t.isdigit():
-                        bytes_to_copy += int(t)
-                        files_to_copy += 1
-                        break
-            # Heartbeat periodico durante l'analisi di una singola cartella
-            if progress_prefix:
-                now = time.time()
-                if now - last_heartbeat >= progress_interval:
-                    status = f"\r {progress_prefix} ({files_to_copy} file, {format_size(bytes_to_copy)})"
-                    print(status.ljust(79)[:79], end="\r", flush=True)
-                    last_heartbeat = now
-        process.wait()
-    except Exception: 
-        return 0, 0
-    return files_to_copy, bytes_to_copy
+        ultima_barra = 0.0
+        for riga in processo.stdout:
+            letta = analizza_riga_robocopy(riga.rstrip("\r\n"))
+            if letta and letta[0] == "copia":
+                byte_da_copiare += letta[1]
+                file_da_copiare += 1
+            adesso = time.time()
+            if adesso - ultima_barra >= SECONDI_FRA_AGGIORNAMENTI:
+                # Anche l'analisi ha la sua barra: su una destinazione di rete
+                # una sola cartella puo' tenere occupato qualche minuto, e
+                # restare senza niente da leggere in quel tratto e' proprio il
+                # difetto che si sta togliendo.
+                testa = f"analisi {indice}/{totale} {file_da_copiare} file {formatta_dimensione(byte_da_copiare)} "
+                spazio = LARGHEZZA_BLOCCO - len(testa)
+                if spazio > 2:
+                    testa += accorcia(nome, spazio)
+                mostra_barra(testa.ljust(LARGHEZZA_BLOCCO)[:LARGHEZZA_BLOCCO])
+                ultima_barra = adesso
+        processo.wait()
+    except (OSError, ValueError) as e:
+        annota(f"[analisi] passata fallita su {origine_piena}: {e}")
+        return None
+    return file_da_copiare, byte_da_copiare
 
-def _read_robocopy_log_realtime(log_file: str, process: subprocess.Popen):
+
+def _leggi_log_dal_vivo(file_log: str, processo: subprocess.Popen, attesa: float = 5.0):
+    """Legge il log di robocopy mentre viene scritto, a blocchi.
+    Robocopy separa le percentuali di avanzamento con il ritorno di
+    carrello, quindi si spezza sia sul ritorno a capo sia su quello.
+    Prima si leggeva un carattere alla volta: misurato, quel modo regge 4,9
+    milioni di caratteri al secondo e quindi non era il collo di bottiglia,
+    ma leggere a blocchi costa 57 volte meno e non c'era motivo di no.
+    Quando non arriva niente restituisce None ogni SECONDI_FRA_BATTITI: è il
+    battito che tiene sveglio chi legge. Senza, mentre robocopy percorre un
+    albero grosso senza copiare nulla, il ciclo resterebbe fermo dentro la
+    lettura e non potrebbe né rispondere a un tasto né dire che è ancora
+    vivo, che è proprio il tratto in cui l'attesa sembra infinita.
     """
-    Legge il file di log di robocopy carattere per carattere in tempo reale,
-    evitando il buffering della pipe standard di Windows.
-    """
-    start_wait = time.time()
-    while not os.path.exists(log_file) and process.poll() is None:
-        if time.time() - start_wait > 5.0:
+    inizio = time.time()
+    while not os.path.exists(file_log) and processo.poll() is None:
+        if time.time() - inizio > attesa:
             break
         time.sleep(0.05)
-        
-    if not os.path.exists(log_file):
+    if not os.path.exists(file_log):
         return
-
-    buf = []
-    with open(log_file, encoding='cp850', errors='replace') as f:
+    resto = ""
+    ultimo_battito = time.time()
+    with open(file_log, encoding=CODIFICA_LOG, errors="replace") as f:
         while True:
-            ch = f.read(1)
-            if not ch:
-                if process.poll() is not None:
-                    ch = f.read(1)
-                    if not ch:
-                        if buf:
-                            yield ''.join(buf)
-                        break
-                else:
+            blocco = f.read(65536)
+            if not blocco:
+                if processo.poll() is None:
                     time.sleep(0.05)
+                    if time.time() - ultimo_battito >= SECONDI_FRA_BATTITI:
+                        ultimo_battito = time.time()
+                        yield None
                     continue
-            
-            if ch == '\n':
-                yield ''.join(buf)
-                buf = []
-            elif ch == '\r':
-                if buf:
-                    yield ''.join(buf)
-                    buf = []
-            else:
-                buf.append(ch)
+                blocco = f.read(65536)
+                if not blocco:
+                    if resto.strip():
+                        yield resto
+                    return
+            ultimo_battito = time.time()
+            resto += blocco
+            pezzi = re.split(r"[\r\n]", resto)
+            resto = pezzi.pop()
+            for pezzo in pezzi:
+                if pezzo.strip():
+                    yield pezzo
 
-def run_robocopy_engine(src: str, dst: str, log_file: str, user_exclusions: list[str] | None = None, is_simulation: bool = False,
-                        total_bytes_task: int = 0, total_bytes_global: int = 0, current_bytes_global: int = 0,
-                        start_time_global: float = 0.0, current_task_name: str = "") -> tuple[dict[str, int], int, list[dict]]:
+
+def esegui_robocopy(
+    origine_piena: str,
+    destinazione_piena: str,
+    file_log: str,
+    esclusioni: list[str] | None = None,
+    simulazione: bool = False,
+    stimatore: Stimatore | None = None,
+    nome_cartella: str = "",
+    indice: int = 1,
+    totale: int = 1,
+) -> tuple[dict[str, int], int, list[dict], int]:
+    """Esegue robocopy su una coppia e ne segue l'avanzamento dal log.
+    Durante la copia non stampa niente per conto proprio: una riga di stato
+    esce solo se qualcuno preme un tasto, oppure ogni SECONDI_FRA_RIGHE se
+    quella cadenza è accesa. L'avanzamento lo racconta il suono.
+    Restituisce le statistiche finali, i byte trasferiti, gli errori e il
+    numero di file che il mirror ha cancellato sulla destinazione.
     """
-    Esegue Robocopy e cattura il suo output in tempo reale leggendo il log su file.
-    Senza il flag /NP, robocopy emette percentuali di progresso per ogni file
-    usando \r (carriage return). Leggiamo il file di log per catturarle dal vivo.
-    Restituisce le statistiche finali.
-    """
-    cmd = build_robocopy_cmd(src, dst, user_exclusions, is_simulation, is_plan=False)
-    
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW 
-    
-    final_stats = {
-        "dirs_total": 0, "dirs_copied": 0, "dirs_skipped": 0, "dirs_failed": 0,
-        "files_total": 0, "files_copied": 0, "files_skipped": 0, "files_failed": 0,
-        "bytes_total": 0, "bytes_copied": 0, "bytes_skipped": 0, "bytes_failed": 0
-    }
-    
-    task_start_time = time.time()
-    print_progress_line(current_task_name, 0, total_bytes_task,
-                        current_bytes_global, total_bytes_global, task_start_time, start_time_global)
+    comando = comando_robocopy(origine_piena, destinazione_piena, esclusioni, simulazione, piano=False)
+    avvio_nascosto = subprocess.STARTUPINFO()
+    avvio_nascosto.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-    errori_task = []
-    bytes_fatti_task = 0
-    last_update_time = 0
-    summary_started = False
-    dash_count = 0
-    current_file_size = 0
-    current_file_fraction = 0.0
-    pct_re = re.compile(r'^\s*(\d+\.?\d*)%\s*$')
+    errori = []
+    byte_fatti = 0
+    file_cancellati = 0
+    codice = -1
+    processo = None
+    log_al_lavoro = ""
+    dimensione_corrente = 0
+    frazione_file = 0.0
+    ultima_riga = time.time()
+    ultima_barra = 0.0
+    ultimo_segnale = 0.0
+    prossimo_segnale = 0.0
+    inizio = time.time()
+    sommario = []
+    regola_percentuale = re.compile(r"^\s*(\d+[.,]?\d*)%\s*$")
+    statistiche = analizza_sommario([])
 
+    def fatti_adesso():
+        return byte_fatti + int(dimensione_corrente * frazione_file)
+
+    def aggiorna_barra(forza=False):
+        """Riscrive la barra a schermo, e ogni tanto una riga nel diario."""
+        nonlocal ultima_barra, ultima_riga
+        adesso = time.time()
+        if forza or adesso - ultima_barra >= SECONDI_FRA_AGGIORNAMENTI:
+            mostra_barra(
+                testo_barra(nome_cartella, indice, totale, stimatore, adesso - inizio, fatti_adesso())
+            )
+            ultima_barra = adesso
+        if SECONDI_FRA_RIGHE > 0 and adesso - ultima_riga >= SECONDI_FRA_RIGHE:
+            annota(
+                f"[stato] {testo_barra(nome_cartella, indice, totale, stimatore, adesso - inizio, fatti_adesso())}"
+            )
+            ultima_riga = adesso
+
+    def forse_suona():
+        nonlocal ultimo_segnale, prossimo_segnale
+        if stimatore is None:
+            return
+        adesso = time.time()
+        if adesso - ultimo_segnale < SECONDI_FRA_SEGNALI:
+            return
+        frazione = stimatore.frazione(adesso - inizio, fatti_adesso())
+        if frazione < prossimo_segnale:
+            return
+        suona_avanzamento(frazione)
+        ultimo_segnale = adesso
+        prossimo_segnale = frazione + PASSO_SEGNALE
+
+    # La barra si disegna subito, prima ancora di lanciare robocopy: fra la
+    # riga della cartella appena conclusa e il primo dato della successiva
+    # passa il tempo di avviare il processo e di veder comparire il log, e in
+    # quel tratto la barra sparirebbe. Con le cartelle che si concludono in un
+    # decimo di secondo, come succede quando non c'e' niente da copiare, quel
+    # buco si ripete di continuo ed e' la barra che sembra ballare.
+    aggiorna_barra(forza=True)
     try:
-        # Scriviamo l'intestazione iniziale nel log prima di lanciare Robocopy
-        with open(log_file, 'w', encoding='cp850', errors='replace') as f_log:
-            f_log.write(f"--- AVVIO: {datetime.datetime.now()} ---\nSRC: {src}\nDST: {dst}\n\n")
-            
-        # Aggiungiamo l'argomento per salvare su log in append
-        cmd.append(f"/LOG+:{log_file}")
-        
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            startupinfo=startupinfo
+        # Il log si scrive in locale e si sposta a destinazione alla fine.
+        # Leggere dal vivo un file che un altro processo sta scrivendo su una
+        # condivisione di rete e' fragile: sul campo, dopo dodici minuti, una
+        # lettura e' fallita con Errno 22 e le statistiche di quella cartella
+        # sono andate perse. In locale quel rischio non c'e'.
+        log_al_lavoro = os.path.join(tempfile.gettempdir(), os.path.basename(file_log))
+        with open(log_al_lavoro, "w", encoding=CODIFICA_LOG, errors="replace") as f_log:
+            f_log.write(f"Avvio {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            f_log.write(f"Origine {origine_piena}\nDestinazione {destinazione_piena}\n")
+        comando.append(f"/LOG+:{log_al_lavoro}")
+        processo = subprocess.Popen(
+            comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=avvio_nascosto
         )
-        
-        summary_lines = []
-
-        for segment in _read_robocopy_log_realtime(log_file, process):
-            stripped = segment.strip()
-            if not stripped:
+        for segmento in _leggi_log_dal_vivo(log_al_lavoro, processo):
+            if segmento is None:
+                # Battito: robocopy sta lavorando in silenzio, ma il tempo
+                # passa lo stesso e la barra deve continuare a dirlo.
+                forse_suona()
+                aggiorna_barra()
                 continue
-            
-            # --- Cattura percentuali di progresso (es. "  45.2%") ---
-            pct_match = pct_re.match(stripped)
-            if pct_match:
-                pct_val = float(pct_match.group(1))
-                current_file_fraction = pct_val / 100.0
-                
-                now_time = time.time()
-                if now_time - last_update_time >= REFRESH_RATE:
-                    partial_bytes = int(current_file_size * current_file_fraction)
-                    task_done = bytes_fatti_task + partial_bytes
-                    global_done = current_bytes_global + task_done
-                    print_progress_line(current_task_name, task_done, total_bytes_task,
-                                        global_done, total_bytes_global, task_start_time, start_time_global)
-                    last_update_time = now_time
+            testo = segmento.strip()
+            if not testo:
                 continue
-            
-            if "-----------" in stripped:
-                dash_count += 1
-                if dash_count >= 4:
-                    summary_started = True
+            percentuale = regola_percentuale.match(testo)
+            if percentuale:
+                frazione_file = float(percentuale.group(1).replace(",", ".")) / 100.0
+                if stimatore is not None:
+                    stimatore.aggiorna_byte(byte_fatti + int(dimensione_corrente * frazione_file))
+                forse_suona()
+                aggiorna_barra()
                 continue
-            
-            if summary_started:
-                summary_lines.append(stripped)
+            if set(testo) == {"-"}:
+                sommario = []
                 continue
-            
-            # Check errori
-            if "ERROR" in stripped or "ERRORE" in stripped:
-                err_info = parse_robocopy_error(stripped)
-                if err_info:
-                    errori_task.append(err_info)
-            
-            # Check riga di file da copiare (New File, Newer, etc.)
-            elif any(tag in stripped for tag in ["New File", "Newer", "new", "newer", "Nuovo file", "Più recente", "Piu recente"]):
-                # Finalizza il file precedente se ce n'era uno in corso
-                if current_file_size > 0:
-                    bytes_fatti_task += current_file_size
+            if "ERROR" in testo or "ERRORE" in testo:
+                errore = analizza_errore_robocopy(testo)
+                if errore:
+                    errori.append(errore)
+                sommario.append(testo)
+                continue
+            letta = analizza_riga_robocopy(segmento)
+            if letta:
+                tipo, dimensione, _nome = letta
+                if tipo == "extra":
+                    file_cancellati += 1
+                else:
+                    byte_fatti += dimensione_corrente
+                    dimensione_corrente = dimensione
+                    frazione_file = 0.0
+                    if stimatore is not None:
+                        stimatore.aggiorna_byte(byte_fatti)
+                    forse_suona()
+                aggiorna_barra()
+                continue
+            sommario.append(testo)
 
-                # Imposta il nuovo file da tracciare
-                current_file_size = 0
-                current_file_fraction = 0.0
-                tokens = stripped.split()
-                for t in tokens:
-                    if t.isdigit():
-                        current_file_size = int(t)
-                        break
+        byte_fatti += dimensione_corrente
+        dimensione_corrente = 0
+        frazione_file = 0.0
+    except OSError as e:
+        # La lettura si e' rotta, ma robocopy sta ancora lavorando: non lo si
+        # abbandona. Si aspetta comunque, e le statistiche si recuperano dal
+        # log a lavoro concluso.
+        print("La lettura dell'avanzamento si e' interrotta,")
+        print("la copia prosegue lo stesso.")
+        annota(f"[motore] lettura interrotta su {origine_piena}: {e}")
 
-                now_time = time.time()
-                if now_time - last_update_time >= REFRESH_RATE:
-                    global_done = current_bytes_global + bytes_fatti_task
-                    print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
-                                        global_done, total_bytes_global, task_start_time, start_time_global)
-                    last_update_time = now_time
+    if processo is not None:
+        try:
+            processo.wait()
+            codice = processo.returncode
+        except OSError as e:
+            annota(f"[motore] attesa di robocopy non riuscita: {e}")
+    if log_al_lavoro:
+        dal_file = _sommario_dal_log(log_al_lavoro)
+        if dal_file:
+            statistiche = dal_file
+        elif sommario:
+            statistiche = analizza_sommario(sommario)
+        _porta_a_destinazione(log_al_lavoro, file_log)
+    annota(f"[robocopy] {nome_cartella}: codice di uscita {codice}, {descrivi_codice_robocopy(codice)}")
+    if codice >= 8:
+        print(f"Robocopy ha segnalato un problema su {nome_cartella}:")
+        print(descrivi_codice_robocopy(codice))
 
-        # Finalizza l'ultimo file se ce n'era uno in corso
-        if current_file_size > 0:
-            bytes_fatti_task += current_file_size
-            current_file_size = 0
+    return statistiche, byte_fatti, errori, file_cancellati, codice
 
-        process.wait()
 
-        # Parsing statistiche finali
-        for line in summary_lines:
-            line_low = line.lower()
-            if ":" not in line: continue
-            nums = [int(x) for x in line.replace(":", " ").split() if x.isdigit()]
-            if len(nums) < 6: continue
-            
-            if "dir" in line_low or "cartell" in line_low:
-                final_stats["dirs_total"] = nums[0]; final_stats["dirs_copied"] = nums[1]
-                final_stats["dirs_skipped"] = nums[2]; final_stats["dirs_failed"] = nums[4]
-            elif "file" in line_low:
-                final_stats["files_total"] = nums[0]; final_stats["files_copied"] = nums[1]
-                final_stats["files_skipped"] = nums[2]; final_stats["files_failed"] = nums[4]
-            elif "byte" in line_low:
-                final_stats["bytes_total"] = nums[0]; final_stats["bytes_copied"] = nums[1]
-                final_stats["bytes_skipped"] = nums[2]; final_stats["bytes_failed"] = nums[4]
+def _sommario_dal_log(percorso: str) -> dict[str, int] | None:
+    """Rilegge il sommario dal log a copia conclusa.
+    Le statistiche non devono dipendere dall'essere riusciti a leggere il log
+    mentre veniva scritto: a lavoro finito il file e' li', completo e fermo,
+    ed e' la fonte piu' affidabile che ci sia.
+    """
+    try:
+        with open(percorso, encoding=CODIFICA_LOG, errors="replace") as f:
+            righe = f.read().splitlines()
+    except OSError as e:
+        annota(f"[motore] sommario non rileggibile da {percorso}: {e}")
+        return None
+    coda = []
+    for riga in righe:
+        if riga.strip() and set(riga.strip()) == {"-"}:
+            coda = []
+            continue
+        coda.append(riga)
+    letto = analizza_sommario(coda)
+    return letto if letto["files_total"] or letto["bytes_total"] or letto["dirs_total"] else None
 
-        # Stampa progresso finale del task
-        global_done = current_bytes_global + bytes_fatti_task
-        print_progress_line(current_task_name, bytes_fatti_task, total_bytes_task,
-                            global_done, total_bytes_global, task_start_time, start_time_global)
 
-        return final_stats, bytes_fatti_task, errori_task
+def _porta_a_destinazione(sorgente: str, arrivo: str) -> None:
+    """Sposta il log finito accanto agli altri, nella destinazione."""
+    try:
+        os.makedirs(os.path.dirname(arrivo), exist_ok=True)
+        shutil.move(sorgente, arrivo)
+    except OSError as e:
+        annota(f"[motore] log rimasto in {sorgente}: {e}")
 
-    except Exception as e:
-        print(f"\nErrore Robocopy: {e}")
-        return final_stats, 0, errori_task
+
+def descrivi_codice_robocopy(codice: int) -> str:
+    """Traduce il codice di uscita di robocopy in una frase.
+    Il codice e' fatto di bit che si sommano, e distingue il caso in cui non
+    c'era niente da fare da quello in cui qualcosa e' andato storto. Senza
+    guardarlo, una cartella copiata male e una cartella gia' aggiornata
+    danno lo stesso resoconto: zero file copiati, nessun errore.
+    """
+    if codice < 0:
+        return "robocopy non ha restituito un codice"
+    if codice == 0:
+        return "niente da fare, era già tutto allineato"
+    pezzi = []
+    if codice & 1:
+        pezzi.append("file copiati")
+    if codice & 2:
+        pezzi.append("file in più sulla destinazione")
+    if codice & 4:
+        pezzi.append("file non corrispondenti")
+    if codice & 8:
+        pezzi.append("alcuni file non sono stati copiati")
+    if codice & 16:
+        pezzi.append("errore grave, nessun file copiato")
+    return ", ".join(pezzi) if pezzi else f"codice non riconosciuto {codice}"
+
+
+def testo_barra(
+    nome: str, indice: int, totale: int, stimatore: Stimatore | None, trascorso: float, byte_fatti: int
+) -> str:
+    """Compone la barra di avanzamento, quaranta caratteri esatti.
+    Ci stanno quattro informazioni e sono scelte in quest'ordine: a che punto
+    e' la cartella in corso, quale cartella e' sul totale, a che punto e' il
+    lavoro intero e quanto manca. Il nome della cartella viene per ultimo
+    perche' e' l'unico che si puo' accorciare senza perdere una misura.
+    Quaranta caratteri sono la larghezza di un display braille: uno sguardo
+    delle dita, senza doverlo far scorrere.
+    """
+    if stimatore is None or stimatore.modo == "nessuna":
+        # Senza storia e senza analisi la percentuale della cartella non
+        # esiste: al suo posto va quel che si sa per certo, cioe' quanto e'
+        # passato di la'. Meglio un dato vero che una percentuale inventata.
+        tutto = stimatore.frazione() if stimatore else 0.0
+        fisso = f"{indice}/{totale} tot{tutto * 100:3.0f}% {formatta_dimensione(byte_fatti)} "
+    else:
+        qui = stimatore.frazione_cartella(trascorso, byte_fatti)
+        tutto = stimatore.frazione(trascorso, byte_fatti)
+        mancano = stimatore.eta(trascorso, byte_fatti)
+        tempo = formatta_durata(mancano) if mancano else "--:--"
+        fisso = f"{qui * 100:3.0f}% {indice}/{totale} tot{tutto * 100:3.0f}% {tempo} "
+    spazio = LARGHEZZA_BLOCCO - len(fisso)
+    if spazio > 2:
+        fisso += accorcia(nome, spazio)
+    return fisso.ljust(LARGHEZZA_BLOCCO)[:LARGHEZZA_BLOCCO]
+
+
+def mostra_barra(testo: str) -> None:
+    """Scrive la barra a schermo, senza farla finire nel diario.
+    Va sul flusso vero e non sullo sdoppiatore, altrimenti il diario di una
+    sessione lunga si riempirebbe di migliaia di copie della stessa riga.
+    Nel diario ci va invece una riga ogni tanto, che e' quel che serve dopo.
+    """
+    flusso = _stdout_originale or sys.stdout
+    try:
+        flusso.write("\r" + testo + "\r")
+        flusso.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def pulisci_barra() -> None:
+    """Cancella la barra prima di scrivere una riga normale."""
+    mostra_barra(" " * LARGHEZZA_BLOCCO)
+
+
+def _destinazione_raggiungibile(destinazione: str) -> bool:
+    """Dice se la destinazione, o almeno un suo antenato, esiste davvero."""
+    percorso = destinazione
+    while percorso:
+        if os.path.exists(percorso):
+            return True
+        genitore = os.path.dirname(percorso)
+        if genitore == percorso:
+            return False
+        percorso = genitore
+    return False
+
+
+def _origini_esistenti(preset: dict) -> list[dict]:
+    """Tiene le coppie la cui origine esiste, avvisando delle altre."""
+    valide = []
+    for coppia in preset["coppie_cartelle"]:
+        if os.path.exists(percorso_lungo(coppia["origine"])):
+            valide.append(coppia)
+        else:
+            print(f"Origine non trovata, saltata: {coppia['origine']}")
+    return valide
+
+
+def _storico_cartelle(preset: dict, macchina: str) -> dict:
+    """Durate e byte di ogni cartella nell'ultima sessione su questa macchina."""
+    voce = preset.get("storico_stats", {}).get(macchina, {})
+    cartelle = voce.get("cartelle")
+    return cartelle if isinstance(cartelle, dict) else {}
+
+
+def _scadenza_da_rispettare(preset: dict) -> bool:
+    """Chiede conferma se la periodicità non è ancora scaduta."""
+    if not preset["ultimo_backup"]:
+        return True
+    try:
+        ultimo = datetime.datetime.strptime(preset["ultimo_backup"], "%Y-%m-%d").date()
+    except ValueError:
+        return True
+    if (datetime.date.today() - ultimo).days >= preset["giorni_periodicita"]:
+        return True
+    print("La periodicità non è ancora scaduta.")
+    return conferma("Procedere comunque? ")
+
+
+def _analizza_cartelle(cartelle: list[dict], destinazione: str, esclusioni: list[str]) -> dict:
+    """Passata di sola lettura su tutte le coppie, per sapere quanto c'è da fare.
+    Si esegue soltanto quando manca lo storico dei tempi, cioè la prima volta
+    che un preset gira su una macchina. Dalla seconda in poi la stima viene
+    dalla sessione precedente e questa scansione, che costa quanto la copia
+    stessa quando la destinazione è in rete, non serve più.
+    """
+    print("Prima esecuzione di questo preset.")
+    print("Analisi delle modifiche in corso.")
+    previsti = {}
+    for indice, coppia in enumerate(cartelle, start=1):
+        nome = coppia["nome_cartella"]
+        origine_piena = percorso_lungo(coppia["origine"])
+        destinazione_piena = percorso_lungo(os.path.join(destinazione, nome))
+        esito = conta_da_trasferire(
+            origine_piena, destinazione_piena, esclusioni, nome=nome, indice=indice, totale=len(cartelle)
+        )
+        if esito is None:
+            pulisci_barra()
+            print(
+                blocchi(
+                    f"Analisi {indice} di {len(cartelle)}, {accorcia(nome, 18)}",
+                    "non riuscita, stima incompleta",
+                )
+            )
+            continue
+        quanti, quanto = esito
+        previsti[nome] = quanto
+        pulisci_barra()
+        print(
+            blocchi(
+                f"Analisi {indice} di {len(cartelle)}, {accorcia(nome, 18)}",
+                f"{quanti} file, {formatta_dimensione(quanto)}",
+            )
+        )
+        suona_avanzamento(indice / len(cartelle))
+    return previsti
+
+
+def _riga_cartella_conclusa(indice: int, totale: int, nome: str, dettaglio: dict) -> str:
+    """La riga che si stampa quando una cartella è finita."""
+    durata = formatta_durata(dettaglio["duration"]) if dettaglio["duration"] >= 1 else "meno di un secondo"
+    if dettaglio["files_copied"]:
+        fatto = f"{dettaglio['files_copied']} file, {formatta_dimensione(dettaglio['bytes_copied'])}"
+    else:
+        fatto = "niente da copiare"
+    return blocchi(f"{indice} di {totale}, {accorcia(nome, 18)}", f"{fatto}, in {durata}")
+
 
 def esegui_backup(preset_index: int | None = None, simulazione: bool = False) -> None:
-    settings = load_settings()
-    if settings is None: return 
-    
-    presets = settings["presets"]
-    current_machine = get_machine_id()
-    
+    """Esegue, o simula, il backup di un preset."""
+    impostazioni = carica_impostazioni()
+    if impostazioni is None:
+        return
+    presets = impostazioni["presets"]
+    macchina = id_macchina()
+
+    if not presets:
+        print("Nessun preset da eseguire.")
+        pausa()
+        return
+
     if preset_index is None:
-        print("\nQuale preset vuoi eseguire?")
-        for i, p in enumerate(presets):
-            mod_sim = " [SIMULAZIONE]" if simulazione else ""
-            print(f"{i + 1}. {p['titolo']}{mod_sim}")
-        try:
-            sel = int(input("Scelta (0 per annullare): ")) - 1
-            if sel == -1: return
-            preset = presets[sel]
-            preset_index = sel
-        except (ValueError, IndexError): return
+        scelta = scegli_voce(_voci_dei_preset(presets), "Quale preset eseguo")
+        if scelta is None:
+            return
+        preset = presets[scelta]
     else:
+        if not 0 <= preset_index < len(presets):
+            print("Preset non trovato.")
+            return
         preset = presets[preset_index]
 
+    doppioni = nomi_duplicati(preset)
+    if doppioni:
+        print("\nBackup non avviato: due o più origini")
+        print("puntano alla stessa destinazione.")
+        print(f"Nomi ripetuti: {', '.join(doppioni)}")
+        print("Con /MIR la seconda copia cancella")
+        print("i dati della prima. Rinominali dal")
+        print("menu Modifica Preset prima di eseguire.")
+        pausa()
+        return
+
     stampa_dettaglio_esteso(preset)
-    tipo_run = "SIMULAZIONE" if simulazione else "BACKUP REALE"
-    print(f"Stai per lanciare: {tipo_run}")
-    if input("Vuoi procedere? (s/n): ").lower() != 's': return
-
-    preset_machine = preset.get("machine_id", "Sconosciuto")
-    if preset_machine != current_machine and not simulazione:
-        print(f"\nATTENZIONE: ID Macchina non corrispondente ({preset_machine}).")
-        if input("Scrivi 'SI' per forzare: ") != "SI": return
-
-    # --- CONTROLLO RAGGIUNGIBILITA DESTINAZIONE ---
-    root_dest = preset["root_destinazione"]
-    dest_ok = False
-    temp_path = root_dest
-    while temp_path:
-        if os.path.exists(temp_path):
-            dest_ok = True
-            break
-        parent = os.path.dirname(temp_path)
-        if parent == temp_path:
-            break
-        temp_path = parent
-        
-    if not dest_ok:
-        print("\nERRORE CRITICO: La destinazione del backup non è raggiungibile o non esiste:")
-        print(f"   {root_dest}")
-        print("Verificare la connessione di rete o che il disco sia montato correttamente.")
-        input("\nPremi INVIO per tornare al menu...")
+    tipo_esecuzione = "simulazione" if simulazione else "backup reale"
+    print(f"Stai per lanciare: {tipo_esecuzione}")
+    if not conferma("Vuoi procedere? "):
         return
 
-    # --- CONTROLLO ESISTENZA ORIGINI ---
-    cartelle_valide = []
-    for c in preset["coppie_cartelle"]:
-        src = fix_long_path(c["origine"])
-        if os.path.exists(src):
-            cartelle_valide.append(c)
-        else:
-            print(f"AVVISO: Origine non trovata, verrà saltata: {c['origine']}")
-    
-    if not cartelle_valide:
+    if preset["machine_id"] != macchina and not simulazione:
+        print(f"L'ID macchina non corrisponde: {preset['machine_id']}")
+        if chiedi("Scrivi SI per forzare: ").strip().upper() != "SI":
+            return
+
+    destinazione = preset["root_destinazione"]
+    if not _destinazione_raggiungibile(destinazione):
+        print("La destinazione non è raggiungibile.")
+        print(destinazione)
+        print("Controlla la rete o che il disco sia montato.")
+        pausa()
+        return
+
+    cartelle = _origini_esistenti(preset)
+    if not cartelle:
         print("Nessuna cartella valida da copiare.")
-        input("\nPremi INVIO per tornare al menu...")
+        pausa()
         return
 
-    if not simulazione and preset["ultimo_backup"]:
-        try:
-            d = datetime.datetime.strptime(preset["ultimo_backup"], "%Y-%m-%d").date()
-            if (datetime.date.today() - d).days < preset["giorni_periodicita"]:
-                print("AVVISO: Periodicità non ancora scaduta.")
-                if input("Procedere comunque? (s/n): ").lower() != 's': return
-        except Exception: pass
+    if not simulazione and not _scadenza_da_rispettare(preset):
+        return
 
-    spegni_pc = False
+    spegnere = False
     if not simulazione:
-        spegni_pc = (input("\nVuoi spegnere il PC al termine? (s/n): ").lower() == 's')
+        # Non passa da conferma: lì invio vuol dire sì, e invio è il tasto
+        # che si preme per riflesso. Spegnere il computer di qualcuno per un
+        # riflesso non va bene, quindi qui si scrive SI per esteso.
+        spegnere = chiedi("Spegnere il PC al termine? Scrivi SI: ").strip().upper() == "SI"
 
-    start_total = time.time()
-    log_dir = os.path.join(root_dest, "Logs")
-    if not os.path.exists(log_dir):
-        try: os.makedirs(log_dir)
-        except Exception: pass 
-    cleanup_old_logs(log_dir, max_age_days=30) 
+    inizio_sessione = time.time()
+    cartella_log = os.path.join(destinazione, "Logs")
+    try:
+        os.makedirs(cartella_log, exist_ok=True)
+        pulisci_log_vecchi(cartella_log, giorni_massimi=30)
+    except OSError as e:
+        print(f"Cartella dei log non disponibile: {e}")
 
-    # --- ANALISI MODIFICHE (per-cartella e globale) ---
-    print("\nAnalisi modifiche in corso...")
-    task_bytes_plan = {}  # {nome_cartella: bytes_da_trasferire}
-    total_bytes_global = 0
-    num_cartelle = len(cartelle_valide)
-    analysis_start = time.time()
-    for idx, coppia in enumerate(cartelle_valide):
-        src = fix_long_path(coppia["origine"])
-        dst = fix_long_path(os.path.join(root_dest, coppia["nome_cartella"]))
-        nome = smart_truncate(coppia["nome_cartella"], 25)
-        pct = (idx / num_cartelle) * 100
-        elapsed_a = time.time() - analysis_start
-        if idx > 0 and elapsed_a > 0:
-            eta_a = _format_eta((elapsed_a / idx) * (num_cartelle - idx))
-        else:
-            eta_a = _format_eta(0)
-        progress_prefix = f"Analisi {idx+1}/{num_cartelle} {pct:.0f}% ~{eta_a} | {nome}"
-        print(f"\r {progress_prefix}".ljust(79)[:79], end="\r", flush=True)
-        files_cnt, bytes_cnt = get_robocopy_plan(
-            src, dst, user_exclusions=preset.get("esclusioni", []),
-            progress_prefix=progress_prefix
-        )
-        task_bytes_plan[coppia["nome_cartella"]] = bytes_cnt
-        total_bytes_global += bytes_cnt
-    print(f"\rDa trasferire: {format_size(total_bytes_global)} in {num_cartelle} cartelle".ljust(79)[:79])
+    nomi = [c["nome_cartella"] for c in cartelle]
+    storico_cartelle = _storico_cartelle(preset, macchina)
+    ha_storia = any(
+        isinstance(storico_cartelle.get(n), dict) and storico_cartelle[n].get("durata", 0) > 0 for n in nomi
+    )
+    previsti = {}
+    if not ha_storia and not simulazione:
+        previsti = _analizza_cartelle(cartelle, destinazione, preset.get("esclusioni", []))
+    stimatore = Stimatore(nomi, storico_cartelle, previsti)
+    print(stimatore.previsione_iniziale())
 
-    # --- ESECUZIONE ---
-    print(f"\n--- Esecuzione {tipo_run} ---")
-    
-    current_bytes_global = 0
-    start_time_global = time.time()
     lista_errori = []
-    
-    report_files_copied = 0
-    report_bytes_copied = 0
-    report_files_failed = 0
-    report_files_skipped = 0
-    report_bytes_skipped = 0
-    
-    snapshot_files = 0
-    snapshot_bytes = 0
-    snapshot_dirs = 0
-    
     dettaglio_sessione = []
+    totali = {
+        "files_copied": 0,
+        "files_failed": 0,
+        "files_skipped": 0,
+        "bytes_copied": 0,
+        "bytes_skipped": 0,
+        "files_deleted": 0,
+        "snapshot_files": 0,
+        "snapshot_bytes": 0,
+        "snapshot_dirs": 0,
+    }
+    inizio_trasferimento = time.time()
+    interrotto = False
 
-    for i, coppia in enumerate(cartelle_valide):
-        src = fix_long_path(coppia["origine"])
-        dst = fix_long_path(os.path.join(root_dest, coppia["nome_cartella"]))
-        nome_dir = coppia["nome_cartella"]
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        log_file = os.path.join(log_dir, f"{nome_dir}-{timestamp}.txt")
-        
-        task_start_time = time.time()
-
-        stats, bytes_fatti, errori_task = run_robocopy_engine(
-            src, dst, log_file,
-            user_exclusions=preset.get("esclusioni", []),
-            is_simulation=simulazione,
-            total_bytes_task=task_bytes_plan.get(nome_dir, 0),
-            total_bytes_global=total_bytes_global,
-            current_bytes_global=current_bytes_global,
-            start_time_global=start_time_global,
-            current_task_name=nome_dir
-        )
-        
-        current_bytes_global += bytes_fatti
-        lista_errori.extend(errori_task)
-        
-        report_files_copied += stats.get("files_copied", 0)
-        report_files_failed += stats.get("files_failed", 0)
-        report_files_skipped += stats.get("files_skipped", 0)
-        report_bytes_copied += stats.get("bytes_copied", 0)
-        report_bytes_skipped += stats.get("bytes_skipped", 0)
-        snapshot_files += stats.get("files_total", 0)
-        snapshot_bytes += stats.get("bytes_total", 0)
-        snapshot_dirs += stats.get("dirs_total", 0)
-
-        task_duration = time.time() - task_start_time
-        
-        dettaglio_sessione.append({
-            "nome": nome_dir,
-            "origine": coppia["origine"],
-            "files_copied": stats.get("files_copied", 0),
-            "bytes_copied": stats.get("bytes_copied", 0),
-            "files_skipped": stats.get("files_skipped", 0),
-            "files_failed": stats.get("files_failed", 0),
-            "files_total": stats.get("files_total", 0),
-            "bytes_total": stats.get("bytes_total", 0),
-            "duration": task_duration
-        })
-
-        m_task, s_task = divmod(int(task_duration), 60)
-        status_msg = f"   [OK] {nome_dir} ({i+1}/{len(cartelle_valide)}) - Tempo: {m_task:02d}:{s_task:02d}"
-        print(f"\r{status_msg.ljust(99)[:99]}")
-
-    play_completion_sound(success=(report_files_failed == 0))
-    print("\n" + "="*60) 
-
-    # ============================================================
-    # REPORT FINALE (COMPARATIVO E DETTAGLIATO)
-    # ============================================================
-    
-    # Gestione Storico Stats
-    if "storico_stats" not in preset: preset["storico_stats"] = {}
-    
-    total_time = time.time() - start_total
-    transfer_time = time.time() - start_time_global
-    avg_speed = report_bytes_copied / transfer_time if transfer_time > 0 else 0
-
-    # Recupero dati precedenti
-    prev_data = preset["storico_stats"].get(current_machine, {})
-    prev_files = prev_data.get("total_files", 0)
-    prev_bytes = prev_data.get("total_bytes", 0)
-    prev_dirs = prev_data.get("total_dirs", 0)
-    prev_files_copied = prev_data.get("files_copied", 0)
-    prev_bytes_copied = prev_data.get("bytes_copied", 0)
-    prev_files_skipped = prev_data.get("files_skipped", 0)
-    prev_files_failed = prev_data.get("files_failed", 0)
-    prev_duration = prev_data.get("duration_seconds", 0)
-    prev_speed = prev_data.get("avg_speed", 0)
-    last_run_date = prev_data.get("last_run_date", "Mai")
-
-    # Aggiornamento dati (solo se non simulazione)
-    if not simulazione and settings:
-        preset["ultimo_backup"] = datetime.date.today().strftime("%Y-%m-%d")
-        preset["storico_stats"][current_machine] = {
-            "last_run_date": datetime.date.today().strftime("%Y-%m-%d"),
-            "total_files": snapshot_files,
-            "total_bytes": snapshot_bytes,
-            "total_dirs": snapshot_dirs,
-            "files_copied": report_files_copied,
-            "bytes_copied": report_bytes_copied,
-            "files_skipped": report_files_skipped,
-            "files_failed": report_files_failed,
-            "duration_seconds": round(total_time, 2),
-            "avg_speed": round(avg_speed, 2),
-            "num_sources": len(cartelle_valide)
-        }
-        save_settings(settings)
-    m_tot, s_tot = divmod(total_time, 60)
-    h_tot, m_tot = divmod(m_tot, 60)
-    
-    print(f"\nRIEPILOGO SESSIONE - {tipo_run}")
-    print("="*60)
-    print(f"Tempo Totale:     {int(h_tot):02d}:{int(m_tot):02d}:{s_tot:06.3f}")
-    
-    # Velocità Media Reale
-    speed_str = "0.00 B/s"
-    if transfer_time > 0 and report_bytes_copied > 0:
-        speed_val = report_bytes_copied / transfer_time
-        speed_str = f"{format_size(speed_val)}/s"
-
-    print("-" * 60)
-    print(f"{'STATISTICHE OPERAZIONI (Sessione Corrente)':<50}")
-    print("-" * 60)
-    
-    print(f"File Copiati:    {str(report_files_copied):<10} ({format_size(report_bytes_copied)})")
-    print(f"File Invariati:  {str(report_files_skipped):<10} (Saltati)")
-    print(f"File Falliti:    {str(report_files_failed):<10}")
-    print(f"Velocità Media:  {speed_str}")
-
-    # Rapporto efficienza
-    tot_files_processed = report_files_copied + report_files_skipped
-    if tot_files_processed > 0:
-        efficienza = (report_files_skipped / tot_files_processed) * 100
-        print(f"Efficienza:      {efficienza:.2f}% (File invariati non riscritti)")
-
-    prossimo = datetime.date.today() + datetime.timedelta(days=preset["giorni_periodicita"])
-    print(f"Prossimo Backup: {prossimo.strftime('%Y-%m-%d')} (ogni {preset['giorni_periodicita']} giorni)")
-
-    # Tabella per-cartella
-    print("-" * 60)
-    print("DETTAGLIO PER CARTELLA")
-    print("-" * 60)
-    print(f"{'NOME':<20} {'COPIATI':<10} {'DIM. COPIATA':<15} {'TEMPO':<8} {'VEL. MEDIA'}")
-    print("-" * 60)
-    for det in dettaglio_sessione:
-        n = smart_truncate(det["nome"], 18)
-        fc = det["files_copied"]
-        bc = format_size(det["bytes_copied"])
-        
-        m_t, s_t = divmod(int(det["duration"]), 60)
-        t_str = f"{m_t:02d}:{s_t:02d}"
-        
-        v_val = det["bytes_copied"] / det["duration"] if det["duration"] > 0 else 0
-        v_str = f"{format_size(v_val)}/s" if det["bytes_copied"] > 0 else "0.00 B/s"
-        
-        print(f"{n:<20} {fc:<10} {bc:<15} {t_str:<8} {v_str}")
-    print("-" * 60)
-
-    # Top 5 dimensione
-    top_dim = sorted([d for d in dettaglio_sessione if d["bytes_copied"] > 0], key=lambda x: x["bytes_copied"], reverse=True)[:5]
-    if top_dim:
-        print("TOP 5 CARTELLE PER DATI TRASFERITI")
-        print("-" * 60)
-        for idx, d in enumerate(top_dim):
-            print(f" {idx+1}. {d['nome']}: {format_size(d['bytes_copied'])} in {d['files_copied']} file")
-        print("-" * 60)
-
-    # Top 5 tempo
-    top_tempo = sorted(dettaglio_sessione, key=lambda x: x["duration"], reverse=True)[:5]
-    if top_tempo:
-        print("TOP 5 CARTELLE PIÙ LENTE (PER TEMPO)")
-        print("-" * 60)
-        for idx, d in enumerate(top_tempo):
-            m_t, s_t = divmod(int(d["duration"]), 60)
-            print(f" {idx+1}. {d['nome']}: {m_t:02d}:{s_t:02d} ({format_size(d['bytes_copied'])} trasferiti)")
-        print("-" * 60)
-
-    print(f"{'CONFRONTO STORICO ARCHIVIO (vs ' + last_run_date + ')':<50}")
-    print("-" * 60)
-
-    if prev_bytes == 0 and prev_files == 0:
-        print(" Nessun dato storico disponibile per il confronto.")
-        print(f" Stato Attuale: {format_size(snapshot_bytes)} in {snapshot_files} file, {snapshot_dirs} cartelle.")
-    else:
-        # --- Variazioni archivio ---
-        diff_bytes = snapshot_bytes - prev_bytes
-        diff_files = snapshot_files - prev_files
-        diff_dirs = snapshot_dirs - prev_dirs
-
-        perc_bytes = (diff_bytes / prev_bytes * 100) if prev_bytes > 0 else 0.0
-        perc_files = (diff_files / prev_files * 100) if prev_files > 0 else 0.0
-        perc_dirs = (diff_dirs / prev_dirs * 100) if prev_dirs > 0 else 0.0
-
-        sign_b = "+" if diff_bytes >= 0 else ""
-        sign_f = "+" if diff_files >= 0 else ""
-        sign_d = "+" if diff_dirs >= 0 else ""
-
-        print(f"{'METRICA':<15} {'PRECEDENTE':<15} {'ATTUALE':<15} {'VARIAZIONE'}")
-        print("-" * 60)
-        print(f"{'Dimensioni':<15} {format_size(prev_bytes):<15} {format_size(snapshot_bytes):<15} {sign_b}{format_size(diff_bytes)} ({sign_b}{perc_bytes:.2f}%)")
-        print(f"{'Num. File':<15} {str(prev_files):<15} {str(snapshot_files):<15} {sign_f}{diff_files} ({sign_f}{perc_files:.2f}%)")
-        print(f"{'Num. Cartelle':<15} {str(prev_dirs):<15} {str(snapshot_dirs):<15} {sign_d}{diff_dirs} ({sign_d}{perc_dirs:.2f}%)")
-
-        # --- Confronto operazioni vs sessione precedente ---
-        if prev_files_copied > 0 or prev_files_skipped > 0:
-            print("-" * 60)
-            print(f"{'CONFRONTO OPERAZIONI (vs sessione precedente)':<50}")
-            print("-" * 60)
-            print(f"{'METRICA':<20} {'PRECEDENTE':<18} {'ATTUALE'}")
-            print("-" * 60)
-            print(f"{'File Copiati':<20} {str(prev_files_copied):<18} {report_files_copied}")
-            print(f"{'Dati Trasferiti':<20} {format_size(prev_bytes_copied):<18} {format_size(report_bytes_copied)}")
-            print(f"{'File Invariati':<20} {str(prev_files_skipped):<18} {report_files_skipped}")
-            print(f"{'File Falliti':<20} {str(prev_files_failed):<18} {report_files_failed}")
-
-        # --- Confronto prestazioni ---
-        if prev_duration > 0:
-            print("-" * 60)
-            print(f"{'CONFRONTO PRESTAZIONI':<50}")
-            print("-" * 60)
-
-            def _fmt_duration(secs):
-                m, s = divmod(int(secs), 60)
-                h, m = divmod(m, 60)
-                return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
-            diff_dur = total_time - prev_duration
-            sign_dur = "+" if diff_dur >= 0 else "-"
-            print(f"{'Durata':<20} {_fmt_duration(prev_duration):<18} {_fmt_duration(total_time):<15} {sign_dur}{_fmt_duration(abs(diff_dur))}")
-
-            prev_speed_str = f"{format_size(prev_speed)}/s" if prev_speed > 0 else "N/A"
-            curr_speed_str = f"{format_size(avg_speed)}/s" if avg_speed > 0 else "N/A"
-            if prev_speed > 0 and avg_speed > 0:
-                speed_delta = ((avg_speed - prev_speed) / prev_speed) * 100
-                sign_sp = "+" if speed_delta >= 0 else ""
-                print(f"{'Velocita Media':<20} {prev_speed_str:<18} {curr_speed_str:<15} {sign_sp}{speed_delta:.1f}%")
-            else:
-                print(f"{'Velocita Media':<20} {prev_speed_str:<18} {curr_speed_str}")
-
-        # --- Tasso di crescita ---
-        if last_run_date != "Mai":
-            try:
-                last_d = datetime.datetime.strptime(last_run_date, "%Y-%m-%d").date()
-                days_elapsed = (datetime.date.today() - last_d).days
-                if days_elapsed > 0 and diff_bytes != 0:
-                    print("-" * 60)
-                    print(f"{'TASSO DI CRESCITA':<50}")
-                    print("-" * 60)
-                    bytes_per_day = diff_bytes / days_elapsed
-                    files_per_day = diff_files / days_elapsed
-                    sign_bpd = "+" if bytes_per_day >= 0 else ""
-                    sign_fpd = "+" if files_per_day >= 0 else ""
-                    print(f"  Periodo:          {days_elapsed} giorni dall'ultimo backup")
-                    print(f"  Dati:             {sign_bpd}{format_size(bytes_per_day)}/giorno")
-                    print(f"  File:             {sign_fpd}{files_per_day:.1f} file/giorno")
-                    # Proiezione annuale
-                    growth_annual = bytes_per_day * 365
-                    sign_ga = "+" if growth_annual >= 0 else ""
-                    print(f"  Proiezione Anno:  {sign_ga}{format_size(growth_annual)}")
-            except Exception:
-                pass
-
-    # Errori inline se <= 10
-    if report_files_failed > 0:
-        print("\n" + "!"*60)
-        print(f" ATTENZIONE: {report_files_failed} operazioni non sono andate a buon fine.")
-        if len(lista_errori) <= 10 and lista_errori:
-            print(" Dettaglio errori:")
-            for err in lista_errori:
-                print(f"   - [ERR {err['code_hex']}] {err['detail']}")
-        else:
-            print(" CONTROLLARE I LOG NELLA CARTELLA DI DESTINAZIONE PER I DETTAGLI!")
-        print("!"*60)
-
-    print("="*60)
-
-    if spegni_pc:
-        print("\nSpegnimento tra 60s. CTRL+C per annullare.")
+    for indice, coppia in enumerate(cartelle, start=1):
+        nome = coppia["nome_cartella"]
+        origine_piena = percorso_lungo(coppia["origine"])
+        destinazione_piena = percorso_lungo(os.path.join(destinazione, nome))
+        marca = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        file_log = os.path.join(cartella_log, f"{nome}-{marca}.txt")
+        inizio_cartella = time.time()
+        stimatore.inizia(nome)
         try:
-            os.system("shutdown /s /t 60")
-            time.sleep(60) 
+            stats, byte_fatti, errori, cancellati, codice = esegui_robocopy(
+                origine_piena,
+                destinazione_piena,
+                file_log,
+                esclusioni=preset.get("esclusioni", []),
+                simulazione=simulazione,
+                stimatore=stimatore,
+                nome_cartella=nome,
+                indice=indice,
+                totale=len(cartelle),
+            )
         except KeyboardInterrupt:
-            os.system("shutdown /a")
-            print("\nSpegnimento annullato.")
+            interrotto = True
+            print("\nInterrotto. Le cartelle già concluse restano copiate.")
+            break
+        durata = time.time() - inizio_cartella
+        stimatore.concludi(nome, durata, byte_fatti)
+        lista_errori.extend(errori)
+        totali["files_copied"] += stats["files_copied"]
+        totali["files_failed"] += stats["files_failed"]
+        totali["files_skipped"] += stats["files_skipped"]
+        totali["bytes_copied"] += stats["bytes_copied"]
+        totali["bytes_skipped"] += stats["bytes_skipped"]
+        totali["files_deleted"] += cancellati
+        totali["snapshot_files"] += stats["files_total"]
+        totali["snapshot_bytes"] += stats["bytes_total"]
+        totali["snapshot_dirs"] += stats["dirs_total"]
+        dettaglio = {
+            "nome": nome,
+            "origine": coppia["origine"],
+            "files_copied": stats["files_copied"],
+            "bytes_copied": stats["bytes_copied"],
+            "files_skipped": stats["files_skipped"],
+            "files_failed": stats["files_failed"],
+            "files_total": stats["files_total"],
+            "bytes_total": stats["bytes_total"],
+            "files_deleted": cancellati,
+            "duration": durata,
+            "previsti": previsti.get(nome),
+        }
+        dettaglio_sessione.append(dettaglio)
+        annota(
+            f"[cartella] {nome}: durata {durata:.1f}s, "
+            f"byte previsti {previsti.get(nome, 'ignoti')}, "
+            f"byte copiati {stats['bytes_copied']}, "
+            f"file copiati {stats['files_copied']}, "
+            f"file invariati {stats['files_skipped']}, "
+            f"file cancellati {cancellati}, codice robocopy {codice}"
+        )
+        pulisci_barra()
+        print(_riga_cartella_conclusa(indice, len(cartelle), nome, dettaglio))
+
+    pulisci_barra()
+    durata_totale = time.time() - inizio_sessione
+    durata_trasferimento = time.time() - inizio_trasferimento
+    suona_esito(totali["files_failed"] == 0 and not interrotto)
+
+    precedente = preset.get("storico_stats", {}).get(macchina, {})
+    if not simulazione and not interrotto:
+        _aggiorna_storico(preset, macchina, dettaglio_sessione, totali, durata_totale, durata_trasferimento)
+        salva_impostazioni(impostazioni)
+
+    stampa_report(
+        tipo_esecuzione,
+        preset,
+        dettaglio_sessione,
+        totali,
+        lista_errori,
+        durata_totale,
+        durata_trasferimento,
+        precedente,
+        interrotto,
+    )
+
+    if spegnere and not interrotto:
+        spegni_il_computer()
     else:
-        if os.path.exists(log_dir):
-            print(f"\nLogs salvati in: {log_dir}")
-        input("\nPremi INVIO per tornare al menu...")
+        if os.path.exists(cartella_log):
+            print(f"Log in {cartella_log}")
+        pausa()
+
+
+def spegni_il_computer(attesa: float = 60.0) -> bool:
+    """Aspetta, e solo alla fine dell'attesa spegne davvero il computer.
+    Il conto alla rovescia lo tiene Scriba, non Windows, e il comando parte
+    per ultimo con tempo zero. La differenza conta: finché si aspetta non c'è
+    niente di armato nel sistema, quindi chiudere Scriba, o vederselo chiudere
+    da un guaio qualsiasi, annulla lo spegnimento invece di lasciarlo in
+    agguato. Con il conto alla rovescia affidato a Windows, un programma che
+    muore durante l'attesa lascia il computer che si spegne da solo, e chi lo
+    sta usando si vede l'avviso senza sapere da dove arrivi.
+    Qualunque tasto annulla, e anche CTRL+C. Restituisce True se lo
+    spegnimento è stato davvero avviato.
+    """
+    print(f"Il computer si spegne fra {int(attesa)} secondi.")
+    print("Premi un tasto qualsiasi per annullare.")
+    scadenza = time.time() + attesa
+    ultimo_avviso = 0.0
+    try:
+        while time.time() < scadenza:
+            if tasto_premuto():
+                print("Spegnimento annullato.")
+                annota("[spegnimento] annullato da un tasto")
+                return False
+            mancano = scadenza - time.time()
+            if mancano <= 10 and time.time() - ultimo_avviso >= 5:
+                print(f"Mancano {int(mancano) + 1} secondi.")
+                ultimo_avviso = time.time()
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("Spegnimento annullato.")
+        annota("[spegnimento] annullato con CTRL+C")
+        return False
+    print("Spegnimento in corso.")
+    annota("[spegnimento] avviato")
+    chiudi_diario()
+    subprocess.run(["shutdown", "/s", "/t", "0"], check=False)
+    return True
+
+
+def _aggiorna_storico(
+    preset: dict,
+    macchina: str,
+    dettaglio: list[dict],
+    totali: dict,
+    durata_totale: float,
+    durata_trasferimento: float,
+) -> None:
+    """Scrive nel preset com'è andata, cartella per cartella.
+    Le durate delle singole cartelle sono quelle su cui si baserà la stima
+    della prossima sessione, ed è il motivo per cui vengono conservate.
+    Le cartelle non toccate stavolta mantengono la loro storia, perché
+    toglierla vorrebbe dire ricominciare da zero al primo backup parziale.
+    """
+    oggi = datetime.date.today().strftime("%Y-%m-%d")
+    storico = preset.setdefault("storico_stats", {})
+    voce = storico.setdefault(macchina, {})
+    cartelle = voce.get("cartelle")
+    if not isinstance(cartelle, dict):
+        cartelle = {}
+    for det in dettaglio:
+        cartelle[det["nome"]] = {
+            "durata": round(det["duration"], 2),
+            "byte": det["bytes_copied"],
+            "file": det["files_copied"],
+            "data": oggi,
+        }
+    velocita = totali["bytes_copied"] / durata_trasferimento if durata_trasferimento > 0 else 0
+    voce.update(
+        {
+            "last_run_date": oggi,
+            "total_files": totali["snapshot_files"],
+            "total_bytes": totali["snapshot_bytes"],
+            "total_dirs": totali["snapshot_dirs"],
+            "files_copied": totali["files_copied"],
+            "bytes_copied": totali["bytes_copied"],
+            "files_skipped": totali["files_skipped"],
+            "files_failed": totali["files_failed"],
+            "duration_seconds": round(durata_totale, 2),
+            "avg_speed": round(velocita, 2),
+            "num_sources": len(dettaglio),
+            "cartelle": cartelle,
+        }
+    )
+    preset["ultimo_backup"] = oggi
+
+
+def _con_segno(valore: float, formatta) -> str:
+    """Formatta una variazione mettendoci davanti il segno."""
+    segno = "+" if valore >= 0 else ""
+    return f"{segno}{formatta(valore)}"
+
+
+def stampa_report(
+    tipo_esecuzione: str,
+    preset: dict,
+    dettaglio: list[dict],
+    totali: dict,
+    errori: list[dict],
+    durata_totale: float,
+    durata_trasferimento: float,
+    precedente: dict,
+    interrotto: bool,
+) -> None:
+    """Racconta com'è andata, in righe corte e senza tabelle a colonne.
+    Le colonne allineate a spazi esistono soltanto per l'occhio: lette una
+    dietro l'altra costringono a tenere a mente l'ordine delle intestazioni.
+    Qui ogni riga porta con sé la propria etichetta.
+    """
+    print()
+    print(f"Riepilogo della sessione, {tipo_esecuzione}")
+    if interrotto:
+        print("Sessione interrotta prima della fine.")
+    print(f"Durata totale {formatta_durata(durata_totale)}")
+    print(f"File copiati {totali['files_copied']}, {formatta_dimensione(totali['bytes_copied'])}")
+    print(f"File già aggiornati {totali['files_skipped']}")
+    print(f"File non riusciti {totali['files_failed']}")
+    if totali["files_deleted"]:
+        print(f"File cancellati dal mirror {totali['files_deleted']}")
+    if durata_trasferimento > 0 and totali["bytes_copied"] > 0:
+        velocita = totali["bytes_copied"] / durata_trasferimento
+        print(f"Velocità media {formatta_dimensione(velocita)} al secondo")
+    lavorati = totali["files_copied"] + totali["files_skipped"]
+    if lavorati > 0:
+        quota = totali["files_skipped"] / lavorati * 100
+        print(f"File già aggiornati sul totale {quota:.1f} per cento")
+    prossimo = datetime.date.today() + datetime.timedelta(days=preset["giorni_periodicita"])
+    print(f"Prossimo backup {prossimo:%Y-%m-%d}, ogni {preset['giorni_periodicita']} giorni")
+
+    if dettaglio:
+        print()
+        print("Dettaglio per cartella")
+        for det in dettaglio:
+            durata = formatta_durata(det["duration"]) if det["duration"] >= 1 else "meno di un secondo"
+            if det["files_copied"]:
+                velocita = det["bytes_copied"] / det["duration"] if det["duration"] > 0 else 0
+                print(
+                    f"{det['nome']}, {det['files_copied']} file, "
+                    f"{formatta_dimensione(det['bytes_copied'])}, in {durata}, "
+                    f"a {formatta_dimensione(velocita)} al secondo"
+                )
+            else:
+                print(f"{det['nome']}, niente da copiare, in {durata}")
+            if det.get("previsti") is not None:
+                print(
+                    f"   previsti {formatta_dimensione(det['previsti'])}, "
+                    f"trasferiti {formatta_dimensione(det['bytes_copied'])}"
+                )
+
+    lente = sorted(dettaglio, key=lambda d: d["duration"], reverse=True)[:5]
+    if len(dettaglio) > 5 and lente:
+        print()
+        print("Le cinque cartelle più lente")
+        for posto, det in enumerate(lente, start=1):
+            print(
+                f"{posto}. {det['nome']}, {formatta_durata(det['duration'])}, "
+                f"{formatta_dimensione(det['bytes_copied'])}"
+            )
+
+    print()
+    ultima = precedente.get("last_run_date", "mai")
+    print(f"Confronto con la sessione precedente, {ultima}")
+    prima_byte = precedente.get("total_bytes", 0)
+    prima_file = precedente.get("total_files", 0)
+    prima_dirs = precedente.get("total_dirs", 0)
+    if not prima_byte and not prima_file:
+        print("Non c'è ancora niente con cui confrontare.")
+        print(
+            f"Adesso l'archivio è {formatta_dimensione(totali['snapshot_bytes'])}, "
+            f"{totali['snapshot_files']} file, {totali['snapshot_dirs']} cartelle."
+        )
+    else:
+        _confronta_archivio(totali, prima_byte, prima_file, prima_dirs)
+        _confronta_operazioni(totali, precedente)
+        _confronta_prestazioni(durata_totale, durata_trasferimento, totali, precedente)
+        _tasso_di_crescita(totali, precedente, ultima)
+
+    if totali["files_failed"] > 0:
+        print()
+        print(f"Attenzione, {totali['files_failed']} operazioni non riuscite.")
+        if errori and len(errori) <= 10:
+            for err in errori:
+                print(f"Errore {err['code_hex']}, {err['detail']}")
+        else:
+            print("I dettagli sono nei log della destinazione.")
+
+
+def _confronta_archivio(totali: dict, prima_byte: int, prima_file: int, prima_dirs: int) -> None:
+    """Quanto è cresciuto l'archivio dall'ultima volta."""
+    diff_byte = totali["snapshot_bytes"] - prima_byte
+    diff_file = totali["snapshot_files"] - prima_file
+    diff_dirs = totali["snapshot_dirs"] - prima_dirs
+    perc_byte = (diff_byte / prima_byte * 100) if prima_byte else 0.0
+    perc_file = (diff_file / prima_file * 100) if prima_file else 0.0
+    perc_dirs = (diff_dirs / prima_dirs * 100) if prima_dirs else 0.0
+    print(
+        f"Dimensioni, prima {formatta_dimensione(prima_byte)}, "
+        f"adesso {formatta_dimensione(totali['snapshot_bytes'])}, "
+        f"{_con_segno(diff_byte, formatta_dimensione)}, {_con_segno(perc_byte, lambda v: f'{v:.2f}%')}"
+    )
+    print(
+        f"File, prima {prima_file}, adesso {totali['snapshot_files']}, "
+        f"{_con_segno(diff_file, str)}, {_con_segno(perc_file, lambda v: f'{v:.2f}%')}"
+    )
+    print(
+        f"Cartelle, prima {prima_dirs}, adesso {totali['snapshot_dirs']}, "
+        f"{_con_segno(diff_dirs, str)}, {_con_segno(perc_dirs, lambda v: f'{v:.2f}%')}"
+    )
+
+
+def _confronta_operazioni(totali: dict, precedente: dict) -> None:
+    """Cosa ha fatto questa sessione rispetto alla precedente."""
+    if not precedente.get("files_copied") and not precedente.get("files_skipped"):
+        return
+    print(f"File copiati, prima {precedente.get('files_copied', 0)}, adesso {totali['files_copied']}")
+    print(
+        f"Dati trasferiti, prima {formatta_dimensione(precedente.get('bytes_copied', 0))}, "
+        f"adesso {formatta_dimensione(totali['bytes_copied'])}"
+    )
+    print(
+        f"File già aggiornati, prima {precedente.get('files_skipped', 0)}, adesso {totali['files_skipped']}"
+    )
+    print(f"File non riusciti, prima {precedente.get('files_failed', 0)}, adesso {totali['files_failed']}")
+
+
+def _confronta_prestazioni(
+    durata_totale: float, durata_trasferimento: float, totali: dict, precedente: dict
+) -> None:
+    """Se questa sessione è andata più svelta o più piano della precedente."""
+    prima_durata = precedente.get("duration_seconds", 0)
+    if prima_durata <= 0:
+        return
+    differenza = durata_totale - prima_durata
+    verso = "in più" if differenza >= 0 else "in meno"
+    print(
+        f"Durata, prima {formatta_durata(prima_durata)}, adesso {formatta_durata(durata_totale)}, "
+        f"{formatta_durata(abs(differenza))} {verso}"
+    )
+    prima_velocita = precedente.get("avg_speed", 0)
+    adesso_velocita = totali["bytes_copied"] / durata_trasferimento if durata_trasferimento > 0 else 0
+    if prima_velocita > 0 and adesso_velocita > 0:
+        scarto = (adesso_velocita - prima_velocita) / prima_velocita * 100
+        print(
+            f"Velocità, prima {formatta_dimensione(prima_velocita)} al secondo, "
+            f"adesso {formatta_dimensione(adesso_velocita)} al secondo, "
+            f"{_con_segno(scarto, lambda v: f'{v:.1f}%')}"
+        )
+
+
+def _tasso_di_crescita(totali: dict, precedente: dict, ultima: str) -> None:
+    """Di quanto cresce l'archivio al giorno, e dove arriverebbe in un anno."""
+    if ultima == "mai":
+        return
+    try:
+        giorno = datetime.datetime.strptime(ultima, "%Y-%m-%d").date()
+    except ValueError:
+        return
+    giorni = (datetime.date.today() - giorno).days
+    diff_byte = totali["snapshot_bytes"] - precedente.get("total_bytes", 0)
+    diff_file = totali["snapshot_files"] - precedente.get("total_files", 0)
+    if giorni <= 0 or diff_byte == 0:
+        return
+    al_giorno = diff_byte / giorni
+    file_al_giorno = diff_file / giorni
+    print(f"Crescita, {giorni} giorni dall'ultimo backup")
+    print(f"Dati {_con_segno(al_giorno, formatta_dimensione)} al giorno")
+    print(f"File {_con_segno(file_al_giorno, lambda v: f'{v:.1f}')} al giorno")
+    print(f"Proiezione su un anno {_con_segno(al_giorno * 365, formatta_dimensione)}")
+
+
 # --- FUNZIONI DI MENU ---
 
+MENU_PRINCIPALE = {
+    "backup": "Esegui il backup",
+    "simulazione": "Esegui una simulazione, senza copiare niente",
+    "vedi": "Vedi i preset e le scadenze",
+    "nuovo": "Crea un preset",
+    "modifica": "Modifica un preset",
+    "elimina": "Elimina un preset",
+    "guida": "Manuale di Scriba",
+    "controlla": "Controlla se c'e' una versione nuova",
+    "dona": "Sostieni chi scrive questi programmi",
+    ".": "Esci",
+}
+
+MENU_MODIFICA = {
+    "generali": "Titolo, periodicita' e destinazione",
+    "aggiungi": "Aggiungi una cartella di origine",
+    "togli": "Togli una cartella di origine",
+    "escludi": "Aggiungi un'esclusione",
+    "riammetti": "Togli un'esclusione",
+    "macchina": "Adotta il preset su questa macchina",
+    ".": "Indietro",
+}
+
+
 def crea_nuovo_preset():
-    print(f"--- {APP_NAME} | Crea Nuovo Preset ---\n")
-    titolo = input("Titolo backup: ").strip()
-    if not titolo: return
+    """Guida la creazione di un preset nuovo."""
+    print(f"{APP_NAME}, nuovo preset")
+    titolo = chiedi("Titolo del backup: ").strip()
+    if not titolo:
+        print("Senza titolo non si va avanti.")
+        return
+    giorni = chiedi_numero("Ogni quanti giorni va rifatto? ", 1, 3650, 30)
 
-    try:
-        giorni = int(input("Periodicità (giorni): "))
-    except ValueError: return
+    print("Scegli la cartella di destinazione.")
+    destinazione = scegli_cartella(f"Destinazione per {titolo}")
+    if not destinazione:
+        print("Nessuna destinazione scelta, preset non creato.")
+        return
 
-    print("\nDestinazione Root...")
-    root_dest = get_folder_dialog(f"Destinazione per '{titolo}'")
-    if not root_dest: return
-
-    nuovo_preset = copy.deepcopy(PRESET_TEMPLATE)
+    nuovo_preset = copy.deepcopy(MODELLO_PRESET)
     nuovo_preset["titolo"] = titolo
-    nuovo_preset["machine_id"] = get_machine_id()
+    nuovo_preset["machine_id"] = id_macchina()
     nuovo_preset["giorni_periodicita"] = giorni
-    nuovo_preset["root_destinazione"] = root_dest
-    nuovo_preset["coppie_cartelle"] = []
+    nuovo_preset["root_destinazione"] = destinazione
 
     while True:
-        print(f"\nOrigini inserite: {len(nuovo_preset['coppie_cartelle'])}")
-        if input("Aggiungere origine? (s/n): ").lower() != 's': break
-        path = get_folder_dialog("Nuova Origine")
-        if path:
-            nome = os.path.basename(path) or path.replace(":", "").replace("\\", "")
-            nuovo_preset["coppie_cartelle"].append({"origine": path, "nome_cartella": nome})
-            print(f"OK: {nome}")
-    # --- NUOVO BLOCCO PER LE ESCLUSIONI ---
-    nuovo_preset["esclusioni"] = [] # Inizializziamo la lista vuota
-    while True:
-        print(f"\nEsclusioni inserite: {len(nuovo_preset['esclusioni'])}")
-        if input("Vuoi escludere una cartella specifica? (s/n): ").lower() != 's': 
+        print(f"Origini inserite: {len(nuovo_preset['coppie_cartelle'])}")
+        if not conferma("Aggiungere un'origine? "):
             break
-        
-        # Usiamo il dialog per scegliere la cartella da NON copiare
-        path_excl = get_folder_dialog("Seleziona cartella da ESCLUDERE")
-        
-        if path_excl:
-            nuovo_preset["esclusioni"].append(path_excl)
-            print(f"Esclusa: {os.path.basename(path_excl)}")
-    # --------------------------------------
+        percorso = scegli_cartella("Cartella di origine")
+        if percorso:
+            usati = [c["nome_cartella"] for c in nuovo_preset["coppie_cartelle"]]
+            nome = nome_destinazione(percorso, usati)
+            nuovo_preset["coppie_cartelle"].append({"origine": percorso, "nome_cartella": nome})
+            print(blocchi(f"Aggiunta {accorcia(percorso, 34)}", f"va in {nome}"))
 
-    settings = load_settings()
-    if settings:
-        settings["presets"].append(nuovo_preset)
-        save_settings(settings)
-        print("\nPreset salvato!")
+    while True:
+        print(f"Esclusioni inserite: {len(nuovo_preset['esclusioni'])}")
+        if not conferma("Escludere una cartella? "):
+            break
+        esclusa = scegli_cartella("Cartella da escludere")
+        if esclusa:
+            nuovo_preset["esclusioni"].append(esclusa)
+            print(f"Esclusa {os.path.basename(esclusa)}")
+
+    impostazioni = carica_impostazioni()
+    if impostazioni:
+        impostazioni["presets"].append(nuovo_preset)
+        if salva_impostazioni(impostazioni):
+            print("Preset salvato.")
+
 
 def modifica_preset() -> None:
-    settings = load_settings()
-    if not settings or not settings["presets"]:
-        print("Nessun preset.")
+    """Modifica un preset esistente."""
+    impostazioni = carica_impostazioni()
+    if not impostazioni or not impostazioni["presets"]:
+        print("Nessun preset da modificare.")
         return
-    for i, p in enumerate(settings["presets"]):
-        print(f"{i + 1}. {p['titolo']}")
-    try:
-        sel = int(input("Scelta (0 annulla): ")) - 1
-        if sel == -1: return
-        preset = settings["presets"][sel]
-    except Exception: return
-
-    # Assicuriamoci che la chiave esclusioni e storico_stats esistano anche nei vecchi preset
-    if "esclusioni" not in preset:
-        preset["esclusioni"] = []
-    if "storico_stats" not in preset:
-        preset["storico_stats"] = {}
+    scelta = scegli_voce(_voci_dei_preset(impostazioni["presets"]), "Quale preset modifico")
+    if scelta is None:
+        return
+    preset = impostazioni["presets"][scelta]
 
     while True:
-        print(f"\n--- Modifica: {preset['titolo']} ---")
-        print("1. Modifica Generali (Titolo, Giorni, Destinazione)")
-        print("2. Aggiungi Cartella ORIGINE")
-        print("3. Rimuovi Cartella ORIGINE")
-        print("4. Aggiungi ESCLUSIONE")
-        print("5. Rimuovi ESCLUSIONE")
-        print("6. Adotta su questa macchina")
-        print("7. Indietro")
-        s = input("Scelta: ")
-        
-        if s == '1':
-            new_t = input(f"Titolo [{preset['titolo']}]: ")
-            if new_t: preset["titolo"] = new_t
-            new_g = input(f"Giorni [{preset['giorni_periodicita']}]: ")
-            if new_g:
-                try:
-                    preset["giorni_periodicita"] = int(new_g)
-                except ValueError:
-                    print("Valore non valido. I giorni di periodicità non sono stati modificati.")
-            if input("Cambiare destinazione? (s/n): ") == 's':
-                nd = get_folder_dialog()
-                if nd: preset["root_destinazione"] = nd
-            save_settings(settings)
-            
-        elif s == '2':
-            path = get_folder_dialog("Seleziona Nuova Origine")
-            if path:
-                nome = os.path.basename(path) or path.replace(":", "")
-                preset["coppie_cartelle"].append({"origine": path, "nome_cartella": nome})
-                save_settings(settings)
-                
-        elif s == '3':
-            for ix, c in enumerate(preset["coppie_cartelle"]):
-                print(f"{ix+1}. {c['origine']}")
-            try:
-                dx = int(input("Rimuovi num (0 annulla): ")) - 1
-                if dx == -1: continue
-                
-                if 0 <= dx < len(preset["coppie_cartelle"]):
-                    target = preset["coppie_cartelle"][dx]
-                    nome_dir = target['nome_cartella']
-                    root = preset['root_destinazione']
-                    
-                    print(f"\nStai rimuovendo: {target['origine']}")
-                    print("ATTENZIONE: Vuoi ELIMINARE anche la cartella di backup fisica?")
-                    print(f"Percorso: {os.path.join(root, nome_dir)}")
-                    
-                    conferma = input("Scrivi 'SI' per cancellare i dati, invio per tenerli: ").strip().upper()
-                    
-                    if conferma == 'SI':
-                        path_del = os.path.join(root, nome_dir)
-                        path_del = fix_long_path(path_del)
-                        if os.path.exists(path_del):
-                            try:
-                                shutil.rmtree(path_del)
-                                print("Cartella fisica eliminata.")
-                            except Exception as e:
-                                print(f"Errore eliminazione fisica: {e}")
-                        else:
-                            print("Cartella fisica non trovata su disco.")
-                    else:
-                        print("I dati fisici NON sono stati toccati.")
-                    
-                    preset["coppie_cartelle"].pop(dx)
-                    save_settings(settings)
-                    print("Voce rimossa dal preset.")
-            except ValueError: pass
+        print(f"\nModifica di {preset['titolo']}")
+        voce = menu(MENU_MODIFICA, show=True, keyslist=True, p="Cosa vuoi fare? ")
+        if voce is None or voce == ".":
+            return
 
-        elif s == '4':
-            path_excl = get_folder_dialog("Seleziona cartella da ESCLUDERE")
-            if path_excl:
-                preset["esclusioni"].append(path_excl)
-                save_settings(settings)
-                print(f"Aggiunta esclusione: {os.path.basename(path_excl)}")
+        if voce == "generali":
+            nuovo_titolo = chiedi(f"Titolo [{preset['titolo']}]: ").strip()
+            if nuovo_titolo:
+                preset["titolo"] = nuovo_titolo
+            giorni = chiedi_numero(
+                f"Giorni [{preset['giorni_periodicita']}]: ", 1, 3650, preset["giorni_periodicita"]
+            )
+            preset["giorni_periodicita"] = giorni
+            if conferma("Cambiare la destinazione? "):
+                nuova = scegli_cartella("Nuova destinazione")
+                if nuova:
+                    preset["root_destinazione"] = nuova
+            salva_impostazioni(impostazioni)
 
-        elif s == '5':
+        elif voce == "aggiungi":
+            percorso = scegli_cartella("Cartella di origine")
+            if percorso:
+                usati = [c["nome_cartella"] for c in preset["coppie_cartelle"]]
+                nome = nome_destinazione(percorso, usati)
+                preset["coppie_cartelle"].append({"origine": percorso, "nome_cartella": nome})
+                salva_impostazioni(impostazioni)
+                print(blocchi(f"Aggiunta {accorcia(percorso, 34)}", f"va in {nome}"))
+
+        elif voce == "togli":
+            if not preset["coppie_cartelle"]:
+                print("Nessuna origine da togliere.")
+                continue
+            voci = [(c["nome_cartella"], c["origine"]) for c in preset["coppie_cartelle"]]
+            dx = scegli_voce(voci, "Quale origine tolgo")
+            if dx is None:
+                continue
+            bersaglio = preset["coppie_cartelle"][dx]
+            nome_cartella_dest = bersaglio["nome_cartella"]
+            radice = preset["root_destinazione"]
+            print(f"Stai togliendo {bersaglio['origine']}")
+            print("Vuoi eliminare anche la copia che sta")
+            print("nella destinazione?")
+            print(os.path.join(radice, nome_cartella_dest))
+            if chiedi("Scrivi SI per cancellarla, invio per tenerla: ").strip().upper() == "SI":
+                da_togliere = percorso_lungo(os.path.join(radice, nome_cartella_dest))
+                if os.path.exists(da_togliere):
+                    try:
+                        shutil.rmtree(da_togliere)
+                        print("Cartella eliminata dal disco.")
+                    except OSError as e:
+                        print(f"Errore nell'eliminazione: {e}")
+                else:
+                    print("Cartella non trovata sul disco.")
+            else:
+                print("I dati sul disco non sono stati toccati.")
+            preset["coppie_cartelle"].pop(dx)
+            salva_impostazioni(impostazioni)
+            print("Voce tolta dal preset.")
+
+        elif voce == "escludi":
+            esclusa = scegli_cartella("Cartella da escludere")
+            if esclusa:
+                preset["esclusioni"].append(esclusa)
+                salva_impostazioni(impostazioni)
+                print(f"Esclusa {os.path.basename(esclusa)}")
+
+        elif voce == "riammetti":
             if not preset["esclusioni"]:
                 print("Nessuna esclusione presente.")
                 continue
-            for ix, e in enumerate(preset["esclusioni"]):
-                print(f"{ix+1}. {e}")
-            try:
-                dx = int(input("Rimuovi num (0 annulla): ")) - 1
-                if dx == -1: continue
-                if 0 <= dx < len(preset["esclusioni"]):
-                    rm = preset["esclusioni"].pop(dx)
-                    save_settings(settings)
-                    print(f"Rimosso: {rm}")
-            except ValueError: pass
+            voci = [(os.path.basename(e.rstrip("\\/")) or e, e) for e in preset["esclusioni"]]
+            dx = scegli_voce(voci, "Quale esclusione riammetto")
+            if dx is None:
+                continue
+            tolta = preset["esclusioni"].pop(dx)
+            salva_impostazioni(impostazioni)
+            print(f"Riammessa {tolta}")
 
-        elif s == '6':
-            preset["machine_id"] = get_machine_id()
-            save_settings(settings)
-            print("Adottato.")
-            
-        elif s == '7': break
+        elif voce == "macchina":
+            preset["machine_id"] = id_macchina()
+            salva_impostazioni(impostazioni)
+            print(f"Preset adottato da {preset['machine_id']}")
+
+
 def elimina_preset():
-    settings = load_settings()
-    if not settings or not settings["presets"]: return
-    for i, p in enumerate(settings["presets"]):
-        print(f"{i + 1}. {p['titolo']}")
-    try:
-        sel = int(input("Elimina num (0 annulla): ")) - 1
-        if sel == -1: return
-        settings["presets"].pop(sel)
-        save_settings(settings)
-        print("Eliminato.")
-    except Exception: pass
-
-def visualizza_presets():
-    settings = load_settings()
-    if not settings or not settings["presets"]:
+    """Elimina un preset, dopo averne mostrato il contenuto e chiesto conferma.
+    Prima bastava digitare il numero: un tasto sbagliato portava via origini,
+    esclusioni e storico di quella macchina, senza una domanda.
+    """
+    impostazioni = carica_impostazioni()
+    if not impostazioni or not impostazioni["presets"]:
         print("Nessun preset.")
         return
-    print(f"\n{'ID':<4} {'TITOLO':<25} {'MACCHINA':<20} {'ULTIMO':<12} {'STATO'}")
-    print("-" * 80)
-    for idx, p in enumerate(settings["presets"]):
-        tit = (p['titolo'][:22] + '..') if len(p['titolo']) > 22 else p['titolo']
-        mac = (p.get('machine_id', 'N/A')[:18] + '..') if len(p.get('machine_id', 'N/A')) > 18 else p.get('machine_id', 'N/A')
-        ult = p['ultimo_backup'] or "Mai"
-        stato = "N/A"
-        if not p['ultimo_backup']: stato = "Nuovo"
-        else:
-            try:
-                d = datetime.datetime.strptime(ult, "%Y-%m-%d").date()
-                delta = (datetime.date.today() - d).days
-                rem = p['giorni_periodicita'] - delta
-                stato = f"Scaduto ({abs(rem)}gg)" if rem < 0 else f"Tra {rem} gg"
-            except Exception: pass
-        print(f"{idx+1:<4} {tit:<25} {mac:<20} {ult:<12} {stato}")
-    print("-" * 80)
-    input("\nInvio...")
+    scelta = scegli_voce(_voci_dei_preset(impostazioni["presets"]), "Quale preset elimino")
+    if scelta is None:
+        return
+    preset = impostazioni["presets"][scelta]
+    print(f"\nStai per eliminare: {preset['titolo']}")
+    print(f"Destinazione: {preset['root_destinazione']}")
+    print(f"Origini: {len(preset['coppie_cartelle'])}")
+    print(f"Esclusioni: {len(preset['esclusioni'])}")
+    print(f"Storico: {len(preset['storico_stats'])} macchine")
+    print("I dati sul disco restano dove sono,")
+    print("si perde soltanto la configurazione.")
+    if chiedi("Scrivi SI per eliminare: ").strip().upper() != "SI":
+        print("Niente eliminato.")
+        return
+    impostazioni["presets"].pop(scelta)
+    if salva_impostazioni(impostazioni):
+        print("Preset eliminato.")
 
-def check_scadenze_avvio():
-    settings = load_settings()
-    if not settings: return
-    
-    current_machine = get_machine_id()
-    
-    # Dizionario per accumulare i contatori: { "NomeMacchina": numero_scaduti }
-    # Inizializziamo la macchina corrente a 0 per essere sicuri che appaia sempre
-    report_macchine = {current_machine: 0}
-    
-    # Lista per memorizzare gli indici dei backup da lanciare (solo per questa macchina)
-    indici_scaduti_locali = []
-    
-    presets = settings.get("presets", [])
-    
-    # --- FASE 1: Analisi ---
-    for idx, p in enumerate(presets):
-        m_id = p.get("machine_id", "Sconosciuto")
-        
-        # Se incontriamo una macchina nuova, la aggiungiamo al registro
-        if m_id not in report_macchine:
-            report_macchine[m_id] = 0
-            
-        # Logica di verifica scadenza
+
+def _stato_scadenza(preset: dict) -> str:
+    """Da quanto e' scaduto un preset, o fra quanto scadra'."""
+    if not preset["ultimo_backup"]:
+        return "mai eseguito"
+    try:
+        ultimo = datetime.datetime.strptime(preset["ultimo_backup"], "%Y-%m-%d").date()
+    except ValueError:
+        return "data illeggibile"
+    passati = (datetime.date.today() - ultimo).days
+    mancano = preset["giorni_periodicita"] - passati
+    if mancano < 0:
+        return f"scaduto da {abs(mancano)} giorni"
+    if mancano == 0:
+        return "scade oggi"
+    return f"fra {mancano} giorni"
+
+
+def _voci_dei_preset(elenco: list[dict]) -> list[tuple[str, str]]:
+    """Prepara i preset per il menu: si sceglie scrivendone il titolo.
+    La descrizione porta quel che serve per non sbagliare bersaglio, cioe'
+    quante origini ha il preset, di quale macchina e' e come sta con la
+    scadenza. Prima si sceglieva contando i numeri in un elenco, ed era il
+    modo piu' facile per lavorare sul preset sbagliato.
+    """
+    voci = []
+    for preset in elenco:
+        descrizione = (
+            f"{len(preset['coppie_cartelle'])} origini, "
+            f"{preset['machine_id'] or 'macchina sconosciuta'}, "
+            f"{_stato_scadenza(preset)}"
+        )
+        voci.append((preset["titolo"], descrizione))
+    return voci
+
+
+def visualizza_presets():
+    """Elenca i preset, una riga per informazione e non a colonne."""
+    impostazioni = carica_impostazioni()
+    if not impostazioni or not impostazioni["presets"]:
+        print("Nessun preset.")
+        return
+    print(f"\nPreset presenti: {len(impostazioni['presets'])}")
+    for idx, p in enumerate(impostazioni["presets"], start=1):
+        print()
+        print(f"{idx}. {p['titolo']}")
+        print(f"   macchina {p['machine_id'] or 'sconosciuta'}")
+        print(f"   ultimo backup {p['ultimo_backup'] or 'mai'}, {_stato_scadenza(p)}")
+        print(f"   origini {len(p['coppie_cartelle'])}, destinazione {p['root_destinazione']}")
+    pausa()
+
+
+def mostra_scadenze():
+    """All'avvio dice quali backup sono scaduti, e offre di eseguirli."""
+    impostazioni = carica_impostazioni()
+    if not impostazioni:
+        return
+    macchina = id_macchina()
+    conteggio = {macchina: 0}
+    scaduti_qui = []
+    for idx, p in enumerate(impostazioni.get("presets", [])):
+        suo = p.get("machine_id") or "sconosciuta"
+        conteggio.setdefault(suo, 0)
         scaduto = False
-        ult = p.get("ultimo_backup")
-        if not ult:
-            scaduto = True # Mai fatto
+        ultimo = p.get("ultimo_backup")
+        if not ultimo:
+            scaduto = True
         else:
             try:
-                d = datetime.datetime.strptime(ult, "%Y-%m-%d").date()
-                delta = (datetime.date.today() - d).days
-                if delta >= p["giorni_periodicita"]:
-                    scaduto = True
-            except Exception: pass
-            
+                giorno = datetime.datetime.strptime(ultimo, "%Y-%m-%d").date()
+                scaduto = (datetime.date.today() - giorno).days >= p["giorni_periodicita"]
+            except ValueError:
+                scaduto = True
         if scaduto:
-            report_macchine[m_id] += 1
-            # Se è scaduto ed è di QUESTA macchina, ci segniamo l'indice per dopo
-            if m_id == current_machine:
-                indici_scaduti_locali.append(idx)
+            conteggio[suo] += 1
+            if suo == macchina:
+                scaduti_qui.append(idx)
 
-    # --- FASE 2: Stampa Riepilogo ---
-    # Se non c'è nulla di scaduto ovunque e abbiamo solo la macchina locale a 0, 
-    # potremmo voler tacere, ma la tua richiesta implica di mostrare lo stato.
-    # Se preferisci il silenzio assoluto quando è tutto ok, dimmelo.
-    
-    print("\n--- STATO SCADENZE ---")
-    
-    # Stampiamo PRIMA la macchina corrente
-    locali = report_macchine[current_machine]
-    print(f"{current_machine}: {locali} scaduti (Questa macchina)")
-    
-    # Stampiamo le ALTRE macchine
-    for m_id, count in report_macchine.items():
-        if m_id != current_machine:
-            # Mostriamo le altre macchine solo se hanno preset registrati
-            print(f"{m_id}: {count} scaduti")
-            
-    print("-" * 30)
+    print("\nStato delle scadenze")
+    print(f"{macchina}, questa macchina: {conteggio[macchina]} scaduti")
+    for suo, quanti in conteggio.items():
+        if suo != macchina:
+            print(f"{suo}: {quanti} scaduti")
 
-    # --- FASE 3: Azione ---
-    if indici_scaduti_locali:
-        # Chiediamo di eseguire solo se ci sono scadenze LOCALI
-        if input("Vuoi eseguire ora i backup scaduti per QUESTA macchina? (s/n): ").lower() == 's':
-            for i in indici_scaduti_locali:
-                esegui_backup(i)
-    else:
-        # Se tutto è a posto localmente, un breve delay per far leggere il report
-        time.sleep(1)
+    if scaduti_qui and conferma("Eseguo ora i backup scaduti di questa macchina? "):
+        for i in scaduti_qui:
+            esegui_backup(i)
+
+
+def mostra_guida():
+    """Apre il manuale con il pager di GBUtils."""
+    percorso = file_di_supporto(NOME_MANUALE)
+    if not os.path.exists(percorso):
+        print("Il manuale non e' insieme al programma.")
+        print(f"Cercato in {percorso}")
+        return
+    manuale(percorso)
+
+
+def controlla_aggiornamenti(solo_se_compilato: bool = True) -> bool:
+    """Chiede a GitHub se c'e' una versione nuova e, se serve, la applica.
+    All'avvio si guarda soltanto da eseguibile, perche' da sorgente
+    l'aggiornamento non potrebbe comunque essere installato; quando invece e'
+    l'utente a chiederlo dal menu si guarda sempre, cosi' almeno sa se e'
+    uscita una versione nuova.
+    Restituisce True quando il programma deve chiudersi perche'
+    l'aggiornamento sta per essere applicato.
+    """
+    try:
+        return gestisci_aggiornamento(APP_NAME, APP_VERSION, API_RELEASE, solo_se_compilato=solo_se_compilato)
+    except Exception as e:  # noqa: BLE001
+        print(f"Controllo aggiornamenti non riuscito: {e}")
+        annota(f"[aggiornamenti] {e}")
+        return False
+
+
 def main():
-    print(f"Benvenuto in {APP_NAME} v{APP_VERSION}\n\tby Gabriele Battaglia (IZ4APU)\n")
-    print(f"ID: {get_machine_id()}")
-    check_scadenze_avvio()
-    while True:
-        print(f"\n=== MENU {APP_NAME} ===")
-        print("1. Esegui Backup")
-        print("2. Esegui SIMULAZIONE")
-        print("3. Visualizza Presets")
-        print("4. Aggiungi Preset")
-        print("5. Modifica Preset")
-        print("6. Elimina Preset")
-        print("7. Esci")
-        s = input("\nScelta: ")
-        if s == '1': esegui_backup(simulazione=False)
-        elif s == '2': esegui_backup(simulazione=True)
-        elif s == '3': visualizza_presets()
-        elif s == '4': crea_nuovo_preset()
-        elif s == '5': modifica_preset()
-        elif s == '6': elimina_preset()
-        elif s == '7': break
+    diario = apri_diario()
+    scalda_audio()
+    try:
+        print(f"{APP_NAME} versione {APP_VERSION} del {RELEASE_DATE}")
+        print("di Gabriele Battaglia (IZ4APU)")
+        print(f"Macchina: {id_macchina()}")
+        if diario:
+            pulisci_log_vecchi(CARTELLA_DIARI, giorni_massimi=30)
+        if controlla_aggiornamenti(solo_se_compilato=True):
+            return
+        mostra_scadenze()
+        while True:
+            voce = menu(MENU_PRINCIPALE, show=True, keyslist=True, p=f"\n{APP_NAME}, cosa faccio? ")
+            if voce is None or voce == ".":
+                break
+            if voce == "backup":
+                esegui_backup(simulazione=False)
+            elif voce == "simulazione":
+                esegui_backup(simulazione=True)
+            elif voce == "vedi":
+                visualizza_presets()
+            elif voce == "nuovo":
+                crea_nuovo_preset()
+            elif voce == "modifica":
+                modifica_preset()
+            elif voce == "elimina":
+                elimina_preset()
+            elif voce == "guida":
+                mostra_guida()
+            elif voce == "dona":
+                Donazione()
+            elif voce == "controlla" and controlla_aggiornamenti(solo_se_compilato=False):
+                break
+        if diario:
+            print("Diario di questa sessione:")
+            print(diario)
+    except KeyboardInterrupt:
+        print("\nInterrotto.")
+    finally:
+        chiudi_diario()
+
 
 if __name__ == "__main__":
     main()

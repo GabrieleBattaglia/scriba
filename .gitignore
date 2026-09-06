@@ -1,10 +1,11 @@
 __pycache__/
 build/
 dist/
-*.spec
 *.zip
 *.exe
 *.log
 *.bak
 scriba_settings.json
 scriba_settings.json.bak
+diari/
+*.tmp

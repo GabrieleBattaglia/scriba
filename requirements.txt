@@ -1,7 +1,17 @@
-# Requirements per Scriba
-# Al momento il progetto utilizza solo la Python Standard Library.
-# Non sono necessarie librerie esterne per l'esecuzione dello script.
+# Requisiti di Scriba.
+# Autori: Gabriele Battaglia (IZ4APU) & ClaudIA (Claude Opus 5, modalita' auto).
 
-# Strumenti di sviluppo e build (opzionali)
-# pyinstaller  # Per generare l'eseguibile (.exe)
-# ruff         # Per l'analisi statica del codice
+# Esecuzione.
+# Scriba usa la libreria standard di Python piu' GBUtils, la libreria comune
+# del parco software, che sta in E:\git\mine\GBUtils e non su PyPI: la sua
+# cartella deve essere nella path.
+# Da GBUtils arrivano menu, dgt, manuale, Acusticator e la coppia
+# update_checker e perform_update, dietro gestisci_aggiornamento.
+# Acusticator, per suonare, si porta dietro queste due.
+numpy
+sounddevice
+
+# Sviluppo e compilazione.
+# pyinstaller  # per costruire l'eseguibile, con scriba.spec
+# ruff         # validatore, configurato in ruff.toml
+# pytest       # suite di prove nella cartella tests

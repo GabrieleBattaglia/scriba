@@ -1,112 +1,77 @@
-================================================================================
-SCRIBA - Advanced Robocopy Wrapper per Windows
-Versione: 2.8.0, giugno 2026.
-================================================================================
+Manuale di Scriba
+Orchestratore di backup basato su Robocopy, per Windows.
+Autori: Gabriele Battaglia (IZ4APU) & ClaudIA.
+La versione e la data di questo programma si leggono all'avvio, sulla prima riga.
 
-DESCRIZIONE
------------
-Scriba è uno script Python (disponibile anche come eseguibile standalone) progettato 
-per orchestrare backup incrementali e mirror tramite l'utility nativa Windows 'Robocopy'. 
-Offre un'interfaccia CLI interattiva, gestione dei preset e statistiche native 
-estratte direttamente dal motore di copia per la massima precisione.
+1. Cos'e' Scriba
+Scriba comanda Robocopy, l'utilita' di copia che Windows si porta dentro, e ci mette intorno quello che a Robocopy manca: i preset, cioe' elenchi di cartelle da copiare sempre nello stesso posto, il controllo delle scadenze, la stima di quanto manca alla fine e un resoconto di com'e' andata, confrontato con la volta precedente.
+Copia in modalita' mirror. La destinazione diventa identica all'origine, quindi quello che nell'origine non c'e' piu' viene tolto anche dalla copia. E' il comportamento giusto per un backup che deve rispecchiare lo stato attuale del disco, ma vuol dire che una cancellazione sbagliata nell'origine, al primo backup successivo, si porta via anche la copia. Chi vuole conservare le versioni vecchie deve tenere piu' destinazioni, non fidarsi del mirror.
 
-CARATTERISTICHE TECNICHE (v2.8.0)
----------------------------------
-- Motore: Robocopy ottimizzato con flag (/MIR /XJ /FFT /R:1 /W:1 /NP /NDL /BYTES).
-- Dati: Preset salvati in JSON con backup automatico anti-corruzione (.bak).
-- UI: Interfaccia CLI con dialoghi di sistema nativi (tkinter).
-- Sicurezza: Machine ID check per prevenire esecuzioni su macchine errate.
-- Feedback: Visualizzazione della cartella in elaborazione con progresso in tempo reale, ETA e report finale dettagliato.
-- Gestione Esclusioni: Supporto nativo per escludere cartelle specifiche e 
-  esclusione automatica GLOBALE di file/cartelle di sistema ($RECYCLE.BIN, etc.).
-- Storico & Trend: Monitoraggio automatico della crescita dell'archivio con 
-  confronto percentuale rispetto all'ultimo backup eseguito.
-- Accessibilità: Segnale acustico al completamento (successo/errore) e barra di avanzamento ottimizzata per screen reader (NVDA).
+2. Come si usa
+Ogni scelta si fa scrivendo una parola, o anche solo le prime lettere che bastano a distinguerla. Invio a vuoto o Escape tornano indietro, e il punto annulla. Vale per il menu principale e per tutte le altre scelte: quale preset eseguire, quale modificare, quale cartella togliere, quale esclusione riammettere. Non ci sono numeri da contare da nessuna parte.
+Le voci del menu principale sono queste.
+backup, esegue il backup di un preset.
+simulazione, fa tutto tranne copiare: dice cosa succederebbe.
+vedi, elenca i preset con le loro scadenze.
+nuovo, crea un preset.
+modifica, cambia un preset esistente.
+elimina, toglie un preset, chiedendo conferma.
+guida, mostra questo manuale.
+controlla, guarda su GitHub se e' uscita una versione nuova.
+dona, per sostenere chi scrive questi programmi.
+il punto, esce.
 
-INSTALLAZIONE ED ESECUZIONE
----------------------------
-A. ESEGUIBILE (Consigliato per portabilità)
-   1. Scaricare l'ultima release (Scriba.exe).
-   2. Eseguire il file. I settings verranno creati nella stessa cartella.
+3. Il preset
+Un preset e' una configurazione di backup e contiene un titolo, la periodicita' in giorni, l'identificativo della macchina su cui e' nato, la cartella di destinazione, l'elenco delle cartelle di origine con il nome che avranno nella destinazione, l'elenco delle cartelle da escludere e lo storico delle sessioni gia' eseguite.
+I preset stanno tutti nel file scriba_settings.json, accanto al programma. Accanto ne resta sempre una copia con estensione bak, che e' la versione precedente: il salvataggio scrive prima un file temporaneo, lo rilegge per controllare che sia valido e solo allora sostituisce l'originale, cosi' un'interruzione non lascia mai le impostazioni a meta'.
+Il nome della cartella di destinazione deve essere unico dentro il preset. Se si aggiungono due origini che finiscono con lo stesso nome, per esempio due cartelle chiamate Documenti su dischi diversi, Scriba cambia da solo il secondo nome anteponendogli quello della cartella superiore. La ragione e' seria: in mirror, due origini che puntano alla stessa destinazione si cancellano i dati a vicenda. Se un preset vecchio ha ancora nomi ripetuti, il backup non parte e Scriba dice quali sono.
+L'identificativo della macchina serve a non eseguire per sbaglio, su un computer, il backup pensato per un altro. Se non corrisponde, Scriba lo dice e chiede di scrivere SI per proseguire. La voce macchina, dentro il menu di modifica, adotta il preset sul computer in uso.
 
-B. SCRIPT PYTHON (Per sviluppo/modifica)
-   Requisiti: Python 3.x, Windows 10/11.
-   1. Lanciare lo script: python scriba.py
+4. Cosa succede durante un backup
+Prima di partire Scriba mostra il preset, chiede conferma, controlla che la destinazione sia raggiungibile e che le origini esistano ancora, e avvisa se la periodicita' non e' ancora scaduta.
+Alla prima esecuzione di un preset su una macchina esegue una passata di sola lettura per contare quanti file e quanti byte ci sono da trasferire. Dalla seconda in poi la salta: a quel punto la stima viene dai tempi della sessione precedente, che sono un indicatore migliore, e la scansione in piu' non serve. Su una destinazione di rete quella passata costa quanto la copia stessa, quindi saltarla dimezza l'attesa.
+Durante la copia c'e' la barra di avanzamento. E' una riga sola, larga esattamente quaranta caratteri come un display braille, che si riscrive sul posto ogni due secondi fra due ritorni a capo. Quello finale riporta il cursore a colonna zero: e' il dettaglio che conta, perche' tiene il focus fermo sul principio della riga e lascia le dita dove sono, a leggere un dato che si aggiorna sotto di loro senza doverlo inseguire.
+Nella barra ci stanno quattro informazioni: a che punto e' la cartella in corso, quale cartella e' sul totale, a che punto e' il lavoro intero e quanto manca. Il nome della cartella occupa lo spazio che avanza, ed e' l'unica cosa che viene accorciata, perche' e' l'unica che si puo' accorciare senza perdere una misura.
+Quando non ci sono ne' storia ne' analisi, per esempio in una simulazione, la percentuale della cartella non esiste e al suo posto compaiono i byte gia' esaminati: meglio un dato vero che una percentuale inventata.
+Due secondi, e non uno, perche' lo screen reader ha bisogno di tempo per leggere quel che cambia: una riga che si riscrive troppo spesso non si riesce a seguire.
+Anche la passata di analisi ha la sua barra, con quante cartelle sono state esaminate e quanto risulta da trasferire.
+La barra vive soltanto a schermo. Nel diario, che deve restare leggibile, va una riga di stato ogni due minuti.
+L'avanzamento si sente. Ogni tanto Scriba suona una campanella, una nota breve che nasce e si spegne da sola come una corda pizzicata: sale di tono man mano che il backup procede, da un do molto grave a inizio lavoro fino a un si acuto alla fine, e insieme si sposta da sinistra a destra fra i due altoparlanti. Sette ottave in tutto. Senza leggere niente si capisce a orecchio se si e' all'inizio, a meta' o quasi alla fine. A sessione conclusa suona un accordo che sale se e' andato tutto bene e che scende se qualcosa non e' riuscito.
+Alla fine di ogni cartella compare una riga con quanti file sono stati copiati e quanto tempo ci e' voluto.
 
-STRUTTURA DEL PRESET
---------------------
-Ogni preset di backup è composto da:
-- Titolo univoco.
-- Periodicità (giorni di validità).
-- Machine ID della macchina di creazione.
-- Root Destinazione (es. H:\Backup).
-- Lista di coppie Cartella Origine -> Nome Destinazione.
-- Lista di cartelle da ESCLUDERE.
-- Storico Stats (automatico): Ultimo stato noto di file e byte.
+5. Come Scriba stima il tempo che manca
+La stima si fonda sul tempo, non sui byte, ed e' una scelta ragionata.
+In un backup periodico quasi tutto il tempo se ne va a confrontare cartelle in cui non e' cambiato niente. Quelle cartelle valgono zero byte, quindi una percentuale calcolata sui byte resta ferma per minuti e poi salta di colpo, e il tempo residuo non converge mai.
+La sessione precedente invece e' un indicatore molto migliore, perche' l'archivio cambia poco e le stesse cartelle costano piu' o meno lo stesso tempo. Scriba conserva quanto e' durata ogni cartella e da li' parte. Mentre lavora confronta il tempo speso davvero con quello che si aspettava e corregge il resto della stima con quel rapporto: se la rete oggi va la meta', anche le cartelle che restano vengono date per il doppio.
+Alla prima esecuzione la storia non c'e' ancora e Scriba ripiega sui byte contati dalla passata di analisi, misurando la velocita' sugli ultimi trenta secondi invece che sulla media dall'inizio, che reagirebbe troppo tardi ai cambi di ritmo.
+Se non ci sono ne' storia ne' analisi, come in una simulazione, si contano le cartelle: e' grossolano ma e' vero, e soprattutto e' qualcosa. Il tempo mancante in quel caso non si inventa e resta scritto con dei trattini.
 
-VOCI DI MENU
-------------
+6. Il resoconto finale
+Al termine Scriba scrive quanto e' durata la sessione, quanti file ha copiato e quanti erano gia' aggiornati, quanti non sono riusciti, quanti ne ha cancellati il mirror sulla destinazione e a che velocita' media ha lavorato.
+Segue il dettaglio di ogni cartella, poi il confronto con la sessione precedente: quanto e' cresciuto l'archivio in byte, file e cartelle, cosa e' cambiato nelle operazioni, se si e' andati piu' svelti o piu' piano, e di quanto cresce l'archivio al giorno con la proiezione su un anno.
+Se le operazioni non riuscite sono dieci o meno, i dettagli compaiono a schermo con il codice di errore e il percorso. Se sono di piu', stanno nei log.
 
-1. ESEGUI BACKUP
-   Lancia la procedura reale.
-   - Fase 1: Inventario rapido (Byte/File previsti).
-   - Fase 2: Esecuzione con monitoraggio costante dei dati trasferiti.
-   - Report Finale: Statistiche dettagliate della sessione e box COMPARATIVO 
-     con lo stato precedente dell'archivio (Delta Byte/File e %).
-   - Gestione Errori Inline: se il numero di errori di copia (es. file in uso,
-     accesso negato) è inferiore o uguale a 10, i dettagli vengono visualizzati 
-     direttamente a schermo al termine del backup con codice errore e percorso file.
-   - Opzione spegnimento PC al termine.
-   
-2. ESEGUI SIMULAZIONE (Dry Run)
-   Esegue Robocopy con flag /L (List only).
+7. Log e diari
+Scriba scrive due cose diverse.
+I log di Robocopy stanno nella cartella Logs dentro la destinazione, uno per cartella e per sessione, con la data e l'ora nel nome. Contengono tutto quello che Robocopy ha fatto, riga per riga.
+Il diario di sessione sta nella cartella diari, accanto al programma, e contiene tutto quello che e' comparso a schermo, comprese le risposte digitate, che il terminale non registra. Serve per rileggere una sessione o per consegnarla intera a chi deve capire un problema. Il percorso del diario viene detto all'uscita.
+Gli uni e gli altri si cancellano da soli dopo trenta giorni.
 
-3. VISUALIZZA PRESETS
-   Dashboard con stato scadenze e ID Macchina.
+8. Esclusioni
+Oltre alle cartelle che si escludono dal menu, Scriba salta sempre alcune cose di sistema: il cestino, System Volume Information, e quando l'origine e' la radice di un disco anche Recovery. Fra i file salta pagefile.sys, hiberfil.sys, swapfile.sys, i file di lock e i segnaposto di Google Drive, che non contengono dati ma solo un collegamento.
 
-4. AGGIUNGI PRESET
-   Wizard guidato con selezione cartelle nativa e gestione esclusioni.
+9. Installazione
+Come eseguibile, scaricare l'ultima release e lanciare il file. Le impostazioni, i diari e il manuale stanno accanto all'eseguibile, o dentro di esso, e non nella cartella da cui lo si lancia: si puo' quindi avviare da un collegamento o da un'attivita' pianificata senza perdere i preset.
+Come sorgente, serve Python 3 su Windows e la cartella GBUtils nella path. Poi si lancia con python scriba.py.
 
-5. MODIFICA PRESET
-   Permette di alterare dati, aggiungere/rimuovere origini o esclusioni, 
-   o "Adottare" un preset su una nuova macchina.
+10. Il primo backup
+Scegliere nuovo e dare un titolo, per esempio Lavoro.
+Indicare ogni quanti giorni va rifatto.
+Scegliere la cartella di destinazione, per esempio un disco esterno.
+Aggiungere una o piu' cartelle di origine.
+Prima di fidarsi, scegliere simulazione: Scriba mostra cosa farebbe senza copiare niente e senza cancellare niente.
+Quando il risultato convince, scegliere backup.
+Dalla seconda volta in poi Scriba dira' anche di quanto e' cresciuto l'archivio e quanto manca alla fine.
 
-6. ELIMINA PRESET
-   Rimuove la configurazione dal file JSON.
-
-7. ESCI
-   Chiude l'applicazione.
-
-LOGGING
--------
-I file di log (.txt) vengono salvati nella destinazione sotto \Logs con timestamp (es. Nome-YYYY-MM-DD_HH-MM.txt) per non sovrascrivere lo storico delle sessioni. Vengono mantenuti per un massimo di 30 giorni, dopodiché vengono ripuliti automaticamente.
-
-NOTE SULL'ARCHIVIO STORICO
---------------------------
-Scriba tiene traccia delle dimensioni totali del tuo backup per ogni macchina. 
-Questo permette di visualizzare il "Trend di crescita" nel report finale.
-Le statistiche vengono aggiornate solo al termine di un backup REALE andato a buon fine.
-
---------------------------------------------------------------------------------
-TUTORIAL: IL TUO PRIMO BACKUP
---------------------------------------------------------------------------------
-
-1. CREAZIONE
-   - Seleziona "4. Aggiungi Preset".
-   - Nome: "Lavoro"; Periodicità: "1" (giorni).
-   - Destinazione: Seleziona il tuo disco esterno.
-   - Origine: Seleziona la cartella "Documenti".
-
-2. ESECUZIONE (Snapshot iniziale)
-   - Seleziona "1. Esegui Backup".
-   - Al termine, Scriba salverà la dimensione attuale della cartella Documenti.
-
-3. SECONDO BACKUP (Monitoraggio crescita)
-   - La prossima volta che eseguirai il backup, Scriba ti dirà di quanto è 
-     cambiato il volume dei tuoi documenti rispetto alla volta precedente.
-
---------------------------------------------------------------------------------
-DISCLAIMER
-Questo software esegue operazioni distruttive sulla destinazione (/MIR).
-Usare sempre la modalità SIMULAZIONE prima di nuovi backup.
-================================================================================
+11. Avvertenza
+Questo programma esegue operazioni distruttive sulla destinazione, perche' copia in mirror. Provare sempre con la simulazione prima di eseguire un preset nuovo o appena modificato.
