@@ -1,6 +1,7 @@
 # Scriba, utilita': prepara l'archivio per la distribuzione.
 # Autori: Gabriele Battaglia (IZ4APU) & ClaudIA (Claude Opus 5, modalita' auto).
-# 04/09/2026: primo chiamante, il mestiere sta in crea_archivio_release di GBUtils V103.
+# 04/09/2026: primo chiamante, il mestiere sta in crea_archivio_release di GBUtils.
+# 06/09/2026: fuori anche la cartella dei diari di sessione.
 
 """Comprime la cartella prodotta da PyInstaller in un solo archivio.
 
@@ -23,7 +24,10 @@ import sys
 
 from GBUtils import crea_archivio_release
 
-FUORI = ["scriba_settings.json"]
+# La barra finale dice a crea_archivio_release che diari e' una cartella e non
+# un file: ci nascono i diari di sessione al primo avvio dell'eseguibile, anche
+# durante la prova che precede il rilascio, e non devono finire nel pacchetto.
+FUORI = ["scriba_settings.json", "diari/"]
 
 
 def main():
