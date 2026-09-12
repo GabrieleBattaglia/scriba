@@ -18,7 +18,17 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 
-from GBUtils import Acusticator, Donazione, dgt, enter_escape, gestisci_aggiornamento, manuale, menu
+from GBUtils import (
+    Acusticator,
+    Donazione,
+    cartella_applicazione,
+    dgt,
+    enter_escape,
+    gestisci_aggiornamento,
+    manuale,
+    menu,
+    percorso_risorsa,
+)
 
 try:
     import msvcrt
@@ -27,8 +37,8 @@ except ImportError:  # fuori da Windows non c'è, e lo stato a richiesta si speg
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "3.0.0"
-RELEASE_DATE = "2026-09-06"
+APP_VERSION = "3.0.1"
+RELEASE_DATE = "2026-09-12"
 VERSIONE_SCHEMA = 1
 NOME_MANUALE = "Manuale_Scriba.txt"
 API_RELEASE = "https://api.github.com/repos/GabrieleBattaglia/scriba/releases/latest"
@@ -77,20 +87,20 @@ def cartella_programma() -> str:
     dell'exe. Non è mai la directory di lavoro corrente, che dipende da dove
     l'utente ha lanciato il programma e che quindi farebbe cercare le
     impostazioni in un posto diverso a ogni avvio.
+    La logica sta in GBUtils, come tutte le utilita' condivise: qui resta il
+    nome con cui Scriba la chiama.
     """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
+    return cartella_applicazione()
 
 
 def file_di_supporto(nome: str) -> str:
     """Percorso di un file che viaggia insieme al programma.
     Da eseguibile PyInstaller i file dichiarati in datas non stanno accanto
     all'exe ma nella cartella temporanea di estrazione, che sta in
-    sys._MEIPASS: chi cerca il manuale deve guardare lì.
+    sys._MEIPASS: chi cerca il manuale deve guardare lì. La ricerca sta in
+    GBUtils.
     """
-    base = getattr(sys, "_MEIPASS", None) or cartella_programma()
-    return os.path.join(base, nome)
+    return percorso_risorsa(nome)
 
 
 FILE_IMPOSTAZIONI = os.path.join(cartella_programma(), "scriba_settings.json")
