@@ -3,6 +3,10 @@
 Autori: Gabriele Battaglia (IZ4APU) & ClaudIA.
 La voce della 3.0.0 è scritta insieme alle modifiche. Quelle precedenti sono ricostruite dalle release pubblicate su GitHub e dai messaggi di commit, quindi riportano soltanto le novità principali.
 
+## 3.0.1, 2026-09-12
+
+I percorsi dei file passano da GBUtils, che dalla V138 li offre a tutti con cartella_applicazione e percorso_risorsa: la logica che dice dove stanno i dati e le risorse era riscritta in dieci progetti, e adesso e' scritta in un posto solo. Il comportamento non cambia, tranne che una risorsa che nel pacchetto non c'e' viene ora cercata anche accanto all'eseguibile.
+
 ## 3.0.0, 2026-09-06
 
 Refactoring profondo, fase 1. Il programma e' lo stesso, ma quasi tutto quel che c'e' sotto e' stato rifatto: il modo di stimare i tempi, il modo di leggere robocopy, il modo di parlare a chi lo usa e il modo di proteggere i dati. Le versioni dalla 2.8.4 alla 2.9.3 sono state tappe di lavoro nella stessa giornata e non sono mai state pubblicate.
