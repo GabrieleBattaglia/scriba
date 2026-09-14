@@ -3,6 +3,10 @@
 Autori: Gabriele Battaglia (IZ4APU) & ClaudIA.
 La voce della 3.0.0 è scritta insieme alle modifiche. Quelle precedenti sono ricostruite dalle release pubblicate su GitHub e dai messaggi di commit, quindi riportano soltanto le novità principali.
 
+## 3.0.2, 2026-09-14
+
+Le tre formattazioni che Scriba aveva in casa, cioè la dimensione in byte, la durata compatta e l'accorciamento di un testo lungo, arrivano adesso da GBUtils, che le offre a tutto il parco software con la issue 9: la stessa formula era riscritta in Scriba, in Cartella e a mano in altri due programmi, e adesso è scritta in un posto solo. Le risposte sono le stesse, verificate una per una su qualche migliaio di valori dal banco di prova di GBUtils; cambia soltanto il caso limite in cui a un nome si concedono quattro caratteri o meno, dove la copia locale restituiva i tre puntini seguiti dal nome intero, cioè una stringa più lunga del limite chiesto. Non si vedeva perché la riga veniva comunque tagliata dopo, e perché le chiamate erano protette da un controllo sullo spazio disponibile.
+
 ## 3.0.1, 2026-09-12
 
 I percorsi dei file passano da GBUtils, che dalla V138 li offre a tutti con cartella_applicazione e percorso_risorsa: la logica che dice dove stanno i dati e le risorse era riscritta in dieci progetti, e adesso e' scritta in un posto solo. Il comportamento non cambia, tranne che una risorsa che nel pacchetto non c'e' viene ora cercata anche accanto all'eseguibile.
