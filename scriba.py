@@ -21,9 +21,12 @@ from tkinter import filedialog
 from GBUtils import (
     Acusticator,
     Donazione,
+    accorcia,
     cartella_applicazione,
     dgt,
     enter_escape,
+    formatta_dimensione,
+    formatta_durata,
     gestisci_aggiornamento,
     manuale,
     menu,
@@ -37,8 +40,8 @@ except ImportError:  # fuori da Windows non c'è, e lo stato a richiesta si speg
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "3.0.1"
-RELEASE_DATE = "2026-09-12"
+APP_VERSION = "3.0.2"
+RELEASE_DATE = "2026-09-14"
 VERSIONE_SCHEMA = 1
 NOME_MANUALE = "Manuale_Scriba.txt"
 API_RELEASE = "https://api.github.com/repos/GabrieleBattaglia/scriba/releases/latest"
@@ -506,29 +509,6 @@ def scegli_cartella(message: str = "Seleziona una cartella") -> str | None:
     return cartella_scelta if cartella_scelta else None
 
 
-def accorcia(text: str, max_len: int = 45) -> str:
-    if len(text) <= max_len:
-        return text
-    meta_lunghezza = (max_len - 3) // 2
-    testa = text[:meta_lunghezza]
-    coda = text[-meta_lunghezza:]
-    return f"{testa}...{coda}"
-
-
-def formatta_dimensione(byte: float) -> str:
-    sign = ""
-    if byte < 0:
-        sign = "-"
-        byte = abs(byte)
-    if byte == 0:
-        return "0.00 B"
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if byte < 1024.0:
-            return f"{sign}{byte:.2f} {unit}"
-        byte /= 1024.0
-    return f"{sign}{byte:.2f} PB"
-
-
 def stampa_dettaglio_esteso(preset: dict) -> None:
     """Mostra il preset prima di eseguirlo, una riga per informazione."""
     print()
@@ -778,15 +758,6 @@ def analizza_errore_robocopy(line: str) -> dict | None:
         "code_hex": trovato.group(2),
         "detail": (trovato.group(3) or "Dettagli non disponibili").strip(),
     }
-
-
-def formatta_durata(seconds: float) -> str:
-    """Formatta un numero di secondi come durata compatta."""
-    if seconds is None or seconds <= 0:
-        return "--:--"
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
 
 def blocchi(*pezzi) -> str:
