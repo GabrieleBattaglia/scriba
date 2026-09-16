@@ -40,8 +40,8 @@ except ImportError:  # fuori da Windows non c'è, e lo stato a richiesta si speg
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "3.0.2"
-RELEASE_DATE = "2026-09-14"
+APP_VERSION = "3.0.3"
+RELEASE_DATE = "2026-09-16"
 VERSIONE_SCHEMA = 1
 NOME_MANUALE = "Manuale_Scriba.txt"
 API_RELEASE = "https://api.github.com/repos/GabrieleBattaglia/scriba/releases/latest"
@@ -632,6 +632,11 @@ FILE_ESCLUSI = [
     "*.glink",
     "*.gform",
     "*.gmap",
+    # Cookie dei programmi costruiti su Electron, Claude compreso: restano
+    # aperti finche' l'applicazione gira e danno errore 32, file in uso. Sono
+    # dati di sessione, non servono a un ripristino.
+    "Cookies",
+    "Cookies-journal",
 ]
 
 
@@ -1582,7 +1587,10 @@ def esegui_backup(preset_index: int | None = None, simulazione: bool = False) ->
     durata_trasferimento = time.time() - inizio_trasferimento
     suona_esito(totali["files_failed"] == 0 and not interrotto)
 
-    precedente = preset.get("storico_stats", {}).get(macchina, {})
+    # Copia profonda, non riferimento: _aggiorna_storico riscrive questa stessa
+    # voce, e senza copia il report finirebbe per confrontare la sessione con se
+    # stessa, mostrando ogni variazione a zero.
+    precedente = copy.deepcopy(preset.get("storico_stats", {}).get(macchina, {}))
     if not simulazione and not interrotto:
         _aggiorna_storico(preset, macchina, dettaglio_sessione, totali, durata_totale, durata_trasferimento)
         salva_impostazioni(impostazioni)

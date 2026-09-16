@@ -512,3 +512,55 @@ class TestSommarioDalLog:
         monkeypatch.setattr(scriba.shutil, "move", non_si_puo)
         scriba._porta_a_destinazione(str(partenza), str(tmp_path / "Logs" / "x.txt"))
         assert partenza.exists()
+
+
+class TestStoricoEConfronto:
+    """Il report confronta la sessione appena finita con quella precedente.
+
+    Il rischio, gia' capitato, e' che i due termini siano lo stesso oggetto:
+    _aggiorna_storico riscrive la voce della macchina, e se chi ha letto lo
+    storico ne tiene un riferimento invece di una copia si ritrova i dati
+    nuovi anche da una parte e dall'altra, con tutte le variazioni a zero.
+    """
+
+    def _totali(self, **valori):
+        base = {
+            "snapshot_files": 100,
+            "snapshot_bytes": 1000,
+            "snapshot_dirs": 10,
+            "files_copied": 5,
+            "bytes_copied": 500,
+            "files_skipped": 95,
+            "files_failed": 0,
+        }
+        base.update(valori)
+        return base
+
+    def test_aggiornare_lo_storico_non_tocca_la_copia_precedente(self):
+        preset = {"storico_stats": {}}
+        scriba._aggiorna_storico(preset, "PC", [], self._totali(), 60.0, 30.0)
+
+        import copy as _copy
+
+        precedente = _copy.deepcopy(preset["storico_stats"]["PC"])
+        scriba._aggiorna_storico(
+            preset, "PC", [], self._totali(snapshot_files=250, files_copied=40), 90.0, 45.0
+        )
+
+        assert precedente["total_files"] == 100, "la copia e' stata alterata dall'aggiornamento"
+        assert preset["storico_stats"]["PC"]["total_files"] == 250
+        assert precedente["files_copied"] == 5
+        assert preset["storico_stats"]["PC"]["files_copied"] == 40
+
+    def test_un_riferimento_invece_della_copia_falserebbe_il_confronto(self):
+        """Controprova: senza copia i due termini coincidono davvero.
+
+        Serve a fissare il motivo della correzione, non a difendere il codice:
+        se un domani la deepcopy sparisse, il confronto tornerebbe muto e
+        questo test spiega perche'.
+        """
+        preset = {"storico_stats": {}}
+        scriba._aggiorna_storico(preset, "PC", [], self._totali(), 60.0, 30.0)
+        riferimento = preset["storico_stats"]["PC"]
+        scriba._aggiorna_storico(preset, "PC", [], self._totali(snapshot_files=250), 60.0, 30.0)
+        assert riferimento["total_files"] == 250

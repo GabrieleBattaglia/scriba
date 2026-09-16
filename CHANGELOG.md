@@ -3,6 +3,12 @@
 Autori: Gabriele Battaglia (IZ4APU) & ClaudIA.
 La voce della 3.0.0 è scritta insieme alle modifiche. Quelle precedenti sono ricostruite dalle release pubblicate su GitHub e dai messaggi di commit, quindi riportano soltanto le novità principali.
 
+## 3.0.3, 2026-09-16
+
+Il confronto con la sessione precedente mostrava sempre tutte le variazioni a zero, qualunque cosa fosse cambiato. La riga che leggeva lo storico ne prendeva un riferimento e non una copia, e subito dopo `_aggiorna_storico` riscriveva quella stessa voce con i dati appena raccolti: quando il report andava a leggere i valori di prima, trovava quelli di adesso. Il confronto, insomma, metteva la sessione a paragone con se stessa. Ora lo storico viene copiato in profondità prima di essere aggiornato, e le differenze tornano ad avere senso.
+
+I cookie dei programmi costruiti su Electron entrano nell'elenco dei file esclusi. Restano aperti per tutto il tempo in cui l'applicazione gira, quindi robocopy li trova bloccati e chiude con l'errore 32, file in uso: nel backup del 16 settembre erano le tre operazioni non riuscite, tutte dentro la cartella di Claude, fra `Network\Cookies` e la stessa coppia dentro `Partitions`. Sono dati di sessione che a un ripristino non servono, e saltarli fa sparire gli errori invece di nasconderli.
+
 ## 3.0.2, 2026-09-14
 
 Le tre formattazioni che Scriba aveva in casa, cioè la dimensione in byte, la durata compatta e l'accorciamento di un testo lungo, arrivano adesso da GBUtils, che le offre a tutto il parco software con la issue 9: la stessa formula era riscritta in Scriba, in Cartella e a mano in altri due programmi, e adesso è scritta in un posto solo. Le risposte sono le stesse, verificate una per una su qualche migliaio di valori dal banco di prova di GBUtils; cambia soltanto il caso limite in cui a un nome si concedono quattro caratteri o meno, dove la copia locale restituiva i tre puntini seguiti dal nome intero, cioè una stringa più lunga del limite chiesto. Non si vedeva perché la riga veniva comunque tagliata dopo, e perché le chiamate erano protette da un controllo sullo spazio disponibile.
