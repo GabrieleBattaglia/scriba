@@ -19,6 +19,8 @@ I percorsi dei file passano da GBUtils, che dalla V138 li offre a tutti con cart
 
 ## 3.0.0, 2026-09-06
 
+Pubblicata su GitHub il 6 settembre 2026 come release `v3.0.0`, con il solo archivio `Scriba.zip` in allegato.
+
 Refactoring profondo, fase 1. Il programma e' lo stesso, ma quasi tutto quel che c'e' sotto e' stato rifatto: il modo di stimare i tempi, il modo di leggere robocopy, il modo di parlare a chi lo usa e il modo di proteggere i dati. Le versioni dalla 2.8.4 alla 2.9.3 sono state tappe di lavoro nella stessa giornata e non sono mai state pubblicate.
 
 ### Sicurezza dei dati e delle configurazioni
