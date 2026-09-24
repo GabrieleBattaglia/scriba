@@ -3,6 +3,10 @@
 Autori: Gabriele Battaglia (IZ4APU) & ClaudIA.
 La voce della 3.0.0 è scritta insieme alle modifiche. Quelle precedenti sono ricostruite dalle release pubblicate su GitHub e dai messaggi di commit, quindi riportano soltanto le novità principali.
 
+## 3.0.4, 2026-09-24
+
+L'invito a offrire un caffè passa dalla voce di menu `dona` all'uscita, come negli altri programmi del parco: compare una volta su cinque quando si esce con il punto, con Escape o con l'invio a vuoto, e non dopo un aggiornamento né dopo un Control C. La voce di menu è sparita perché non faceva quello che prometteva: chiamava l'invito con la probabilità di serie, e quattro volte su cinque, scegliendola, non compariva niente. L'invito è sempre in italiano, anche su un Windows in un'altra lingua. Il manuale lo ricorda accanto al punto che esce.
+
 ## 3.0.3, 2026-09-16
 
 Il confronto con la sessione precedente mostrava sempre tutte le variazioni a zero, qualunque cosa fosse cambiato. La riga che leggeva lo storico ne prendeva un riferimento e non una copia, e subito dopo `_aggiorna_storico` riscriveva quella stessa voce con i dati appena raccolti: quando il report andava a leggere i valori di prima, trovava quelli di adesso. Il confronto, insomma, metteva la sessione a paragone con se stessa. Ora lo storico viene copiato in profondità prima di essere aggiornato, e le differenze tornano ad avere senso.

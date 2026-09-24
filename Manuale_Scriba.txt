@@ -18,8 +18,7 @@ modifica, cambia un preset esistente.
 elimina, toglie un preset, chiedendo conferma.
 guida, mostra questo manuale.
 controlla, guarda su GitHub se e' uscita una versione nuova.
-dona, per sostenere chi scrive questi programmi.
-il punto, esce.
+il punto, esce. Una volta ogni tanto, uscendo, Scriba ricorda che chi lo trova utile puo' offrire un caffe' a chi lo ha scritto, e dice come.
 
 3. Il preset
 Un preset e' una configurazione di backup e contiene un titolo, la periodicita' in giorni, l'identificativo della macchina su cui e' nato, la cartella di destinazione, l'elenco delle cartelle di origine con il nome che avranno nella destinazione, l'elenco delle cartelle da escludere e lo storico delle sessioni gia' eseguite.

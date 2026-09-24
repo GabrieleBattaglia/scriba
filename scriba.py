@@ -40,8 +40,8 @@ except ImportError:  # fuori da Windows non c'è, e lo stato a richiesta si speg
 
 # --- CONFIGURAZIONE E COSTANTI ---
 APP_NAME = "Scriba"
-APP_VERSION = "3.0.3"
-RELEASE_DATE = "2026-09-16"
+APP_VERSION = "3.0.4"
+RELEASE_DATE = "2026-09-24"
 VERSIONE_SCHEMA = 1
 NOME_MANUALE = "Manuale_Scriba.txt"
 API_RELEASE = "https://api.github.com/repos/GabrieleBattaglia/scriba/releases/latest"
@@ -1894,7 +1894,6 @@ MENU_PRINCIPALE = {
     "elimina": "Elimina un preset",
     "guida": "Manuale di Scriba",
     "controlla": "Controlla se c'e' una versione nuova",
-    "dona": "Sostieni chi scrive questi programmi",
     ".": "Esci",
 }
 
@@ -2211,6 +2210,14 @@ def main():
         while True:
             voce = menu(MENU_PRINCIPALE, show=True, keyslist=True, p=f"\n{APP_NAME}, cosa faccio? ")
             if voce is None or voce == ".":
+                # All'uscita voluta, una volta su cinque, l'invito a offrire
+                # un caffe', come negli altri programmi del parco: non dopo
+                # un aggiornamento ne' dopo un Control C. Fino alla 3.0.3
+                # stava in una voce di menu che, con la probabilita' di
+                # serie, quattro volte su cinque non mostrava niente.
+                # Scriba parla solo italiano: senza lingua esplicita, su un
+                # Windows inglese l'invito arriverebbe in inglese.
+                Donazione(lang="it")
                 break
             if voce == "backup":
                 esegui_backup(simulazione=False)
@@ -2226,8 +2233,6 @@ def main():
                 elimina_preset()
             elif voce == "guida":
                 mostra_guida()
-            elif voce == "dona":
-                Donazione()
             elif voce == "controlla" and controlla_aggiornamenti(solo_se_compilato=False):
                 break
         if diario:
